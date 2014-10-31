@@ -33,7 +33,8 @@ enum datsim_event_type
 {
     KICK_OFF,    /* initial event */
     JOB_SUBMIT,  /*from initilized workload*/
-    WORK_ENQUEUE,
+    SCHED_REQ,   /*trigger scheduler iteration*/
+    JOB_READY,   /*scheduler -> sender to start a data transfer job*/
     /*following are data related events*/
     SEND_REQ,  /* source_host -> router, router -> dest_host*/
     RECEIVE_ACK,  /* dest_host -> router, router ->  source_host*/
@@ -58,7 +59,7 @@ struct JobStat  {
     double created;
     double start;
     double end;
-    //int concurrency;
+    uint64_t remained_size;
 };
 
 typedef struct Job Job;

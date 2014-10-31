@@ -32,6 +32,7 @@ extern double kickoff_epoch_time;
 extern char jobtrace_file_name[256];
 extern char output_file_name[256];
 extern float fraction;
+extern int trans_limit;
 
 extern const char* ready_string;
 

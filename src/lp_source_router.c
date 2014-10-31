@@ -21,7 +21,7 @@ typedef struct source_router_state source_router_state;
  * server in question. This struct is setup when the LP initialization function
  * ptr is called */
 struct source_router_state {
-    long long size_download;
+    long size_download;
     double time_download;
     tw_stime start_ts;    /* time that we started sending requests */
     tw_stime end_ts;      /* time that last request finished */
@@ -141,7 +141,7 @@ void lpf_source_router_finalize(
     tw_lp * lp)
 {
     ns->end_ts = tw_now(lp);
-    printf("[source_router][%lu]start_time=%lf;end_time=%lf, makespan=%lf, data_forward_size=%llu\n",
+    printf("[source_router][%lu]start_time=%lf;end_time=%lf, makespan=%lf, data_forward_size=%lu\n",
         lp->gid,
         ns->start_ts,
         ns->end_ts,

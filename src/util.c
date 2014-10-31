@@ -9,6 +9,7 @@ int net_id = 0;
 FILE *event_log = NULL;
 
 float fraction = 1.0;
+int trans_limit = 0;
 
 //static Workunit* parse_workunit_by_trace(gchar * line);
 static Job* parse_job_by_trace(gchar *line);
@@ -55,7 +56,7 @@ static void free_value(gpointer data) {
 
 
 void print_job(Job* job) {
-    printf("jobid=%s;source=%s;destination=%s;queued=%f;size=%llu;state=%s",
+    printf("jobid=%s;source=%s;destination=%s;queued=%f;size=%lu;state=%s",
         job->id, 
         job->source_host,
         job->dest_host,

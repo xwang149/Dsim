@@ -172,12 +172,14 @@ void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m,
         job->stats.end = now_sec(lp);
         double data_move_time_sec = job->stats.end - job->stats.start;
         strcpy(job->state, "done");
-        fprintf(event_log, "%lf;dest_host;%lu;JD;jobid=%s download_size=%llu download_time=%lf\n",
+        fprintf(event_log, "%lf;dest_host;%lu;TD;jobid=%s;download_size=%lu;submit_time=%lf;start_time=%lf;end_time=%lf\n",
         		now_sec(lp),
                 lp->gid,
                 jobid,
                 job->inputsize,
-                data_move_time_sec);
+                job->stats.created,
+                job->stats.start,
+                job->stats.end);
         ns->data_download_time += data_move_time_sec;
         ns->total_processed += 1;
         send_received_notification(jobid, lp);

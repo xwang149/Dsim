@@ -23,7 +23,8 @@ typedef struct source_host_state source_host_state;
  * ptr is called */
 struct source_host_state {
     int total_job;
-    long long size_forward;
+    int concur_jobs;
+    long size_forward;
     tw_stime start_ts;    /* time that we started sending requests */
     tw_stime end_ts;      /* time that last request finished */
 };
@@ -42,8 +43,9 @@ static void lpf_source_host_finalize(source_host_state * ns, tw_lp * lp);
 /*event handlers*/
 static void handle_kick_off_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
 static void handle_job_submit_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
-static void handle_work_enqueue_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
-static void handle_work_done_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
+static void handle_schedule_req_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
+static void handle_job_ready_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
+static void handle_job_done_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
 
 /* plan the destination */
 static tw_lpid plan_dest(Job* job);
@@ -151,11 +153,14 @@ void lpf_source_host_event(
         case JOB_SUBMIT:
             handle_job_submit_event(ns, b, m, lp);
             break;
-        case WORK_ENQUEUE:
-        	handle_work_enqueue_event(ns, b, m, lp);
+        case SCHED_REQ:
+        	handle_schedule_req_event(ns, b, m, lp);
+        	break;
+        case JOB_READY:
+        	handle_job_ready_event(ns, b, m, lp);
             break;
         case RECEIVE_ACK:
-            handle_work_done_event(ns, b, m, lp);
+            handle_job_done_event(ns, b, m, lp);
             break;
         default:
             printf("\nsource_host Invalid message type %d from %lu\n", m->event_type, m->src);
@@ -180,7 +185,7 @@ void lpf_source_host_finalize(
     tw_lp * lp)
 {
     ns->end_ts = tw_now(lp);
-    printf("[source_host][%lu]start_time=%lf;end_time=%lf, makespan=%lf, total_job=%d, total_forward_size=%llu\n",
+    printf("[source_host][%lu]start_time=%lf;end_time=%lf, makespan=%lf, total_job=%d, total_forward_size=%lu\n",
         lp->gid,
         ns->start_ts,
         ns->end_ts,
@@ -206,11 +211,13 @@ void handle_kick_off_event(
         Job* job = (Job*)value;
         tw_event *e;
         datsim_msg *msg;
-        tw_stime submit_time;
-        submit_time =  us_to_ns(etime_to_stime(job->stats.created)) + ns_tw_lookahead;
+        tw_stime create_time, submit_time;
+        create_time =  us_to_ns(etime_to_stime(job->stats.created));
+        submit_time = create_time + ns_tw_lookahead;
         if (fraction > 0 && fraction < 1.0) {
         	submit_time = submit_time * fraction;
         }
+        job->stats.created = ns_to_s(create_time);
         e = codes_event_new(lp->gid, submit_time, lp);
         msg = tw_event_data(e);
         msg->event_type = JOB_SUBMIT;
@@ -229,34 +236,63 @@ void handle_job_submit_event(
     char* job_id = m->object_id;
     Job* job = g_hash_table_lookup(job_map, job_id);
     assert(job);
-    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s destination=%s inputsize=%llu\n",
-    		now_sec(lp), lp->gid, job_id, job->dest_host, job->inputsize);
-    //put job in the queue
+    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s\n",
+    		now_sec(lp), lp->gid, job_id);
+    //put job in the queue, and request for scheduler
     g_queue_push_tail(work_queue, job->id);
     tw_event *e;
     datsim_msg *msg;
     e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
     msg = tw_event_data(e);
-    msg->event_type = WORK_ENQUEUE;
+    msg->event_type = SCHED_REQ;
     strcpy(msg->object_id, job->id);
     tw_event_send(e);
     return;
 }
 
+static void handle_schedule_req_event(
+	    source_host_state * ns,
+	    tw_bf * b,
+	    datsim_msg * m,
+	    tw_lp * lp)
+{
+	if (strcmp(m->object_id, "NAN") != 0) {
+		fprintf(event_log, "%lf;source_host;%lu;WQ;jobid=%s\n",
+				now_sec(lp), lp->gid, m->object_id);
+	}
+    //schedule policy
+    if (!g_queue_is_empty(work_queue)){
+    	//check trans_limit
+    	if (trans_limit == 0 || ns->concur_jobs < trans_limit){
+    		//pop the first job from the queue
+    	    char job_id[MAX_LENGTH_ID];
+    	    strcpy(job_id, g_queue_pop_head(work_queue));
+    	    Job* job = g_hash_table_lookup(job_map, job_id);
+    	    assert(job);
+    	    //pass ready job
+    	    tw_event *e;
+    	    datsim_msg *msg;
+    	    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
+    	    msg = tw_event_data(e);
+    	    msg->event_type = JOB_READY;
+    	    strcpy(msg->object_id, job->id);
+    	    tw_event_send(e);
+    	}
+    }
+    return;
+}
 
-void handle_work_enqueue_event(
+
+void handle_job_ready_event(
     source_host_state * ns,
     tw_bf * b,
     datsim_msg * m,
     tw_lp * lp)
 {
-    fprintf(event_log, "%lf;source_host;%lu;WQ;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
-    //pop first job in the queue
-    char job_id[MAX_LENGTH_ID];
-    strcpy(job_id, g_queue_pop_head(work_queue));
+    char* job_id = m->object_id;
     Job* job = g_hash_table_lookup(job_map, job_id);
     assert(job);
-
+    fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
     //prepare to send the job to destination
     datsim_msg m_remote;
     tw_lpid dest_id = get_source_router_lp_id();
@@ -265,24 +301,34 @@ void handle_work_enqueue_event(
     m_remote.next_hop = plan_dest(job);
     strcpy(m_remote.object_id, job->id);
     m_remote.size = job->inputsize;
-    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;filesize=%llu\n", now_sec(lp), lp->gid, job->dest_host, job->inputsize);
+    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;filesize=%lu\n",
+    		now_sec(lp), lp->gid, job->dest_host, job->inputsize);
     job->stats.start = now_sec(lp);
+    ns->concur_jobs += 1;
+    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;concurency=%d\n", now_sec(lp), lp->gid, m->object_id,ns->concur_jobs);
     model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
-
     return;
 }
 
-void handle_work_done_event(source_host_state * ns,
+void handle_job_done_event(source_host_state * ns,
         tw_bf * b,
         datsim_msg * m,
         tw_lp * lp)
 {
     char *job_id = m->object_id;
-    fprintf(event_log, "%lf;source_host;%lu;WD;jobid=%s\n", now_sec(lp), lp->gid, job_id);
+    ns->concur_jobs -= 1;
+    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;concurency=%d\n", now_sec(lp), lp->gid, job_id,ns->concur_jobs);
     Job* job = g_hash_table_lookup(job_map, job_id);
     ns->total_job += 1;
     ns->size_forward += job->inputsize;
-
+    //request the next job
+    tw_event *e;
+    datsim_msg *msg;
+    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
+    msg = tw_event_data(e);
+    msg->event_type = SCHED_REQ;
+    strcpy(msg->object_id, "NAN");
+    tw_event_send(e);
 }
 
 static tw_lpid plan_dest(Job* job)
