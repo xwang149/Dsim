@@ -139,4 +139,30 @@ Job* parse_job_by_trace(gchar* line) {
 }
 
 
+GHashTable* parse_trans_limit(char* trans_limit_filename) {
+    FILE *f;
+    char line[MAX_LEN_TRACE_LINE];
+    f = fopen(trans_limit_filename, "r");
+    if (f == NULL) {
+    	perror(trans_limit_filename);
+    	exit(1);
+    }
+    GHashTable *limit_map = NULL;
+    limit_map =  g_hash_table_new_full(g_str_hash, g_str_equal, free_key, free_value);
+    printf("[source_host]parsing trans-limit from %s ...\n", trans_limit_filename);
+    while ( fgets ( line, sizeof(line), f ) != NULL ){ /* read a line */
+    	Trans_Limit* tl=NULL;
+    	tl = malloc(sizeof(Trans_Limit));
+    	memset(tl, 0, sizeof(Trans_Limit));
+        gchar ** parts = NULL;
+        g_strstrip((gchar*)line);
+        parts = g_strsplit((gchar*)line,"=", 5);
+        strcpy(tl->dest_host, parts[0]);
+        tl->trans_limit = atoi(parts[1]);
+        memset(line, 0, sizeof(line));
+        g_hash_table_insert(limit_map, tl->dest_host, tl);
+    }
+    return limit_map;
+}
+
 

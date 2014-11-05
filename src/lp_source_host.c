@@ -14,6 +14,7 @@
 #include "codes/lp-type-lookup.h"
 
 GHashTable *job_map=NULL;
+GHashTable *limit_map=NULL;
 static GQueue* work_queue;
 
 /* define state*/
@@ -86,10 +87,12 @@ static void reset_epoch_time() {
     }
 }
 
+
 void init_source_host() {
     /*parse workload file and init job_map*/
     job_map = parse_jobtrace(jobtrace_file_name);
     reset_epoch_time();
+    limit_map = parse_trans_limit(trans_limit_filename);
     //printf("[awe_server]checking jobs...done, %d invalid jobs removed\n", ct);
     printf("[source_host]checking jobs...done");
     //display_hash_table(job_map, "job_map");
@@ -262,13 +265,16 @@ static void handle_schedule_req_event(
 	}
     //schedule policy
     if (!g_queue_is_empty(work_queue)){
+    	char job_id[MAX_LENGTH_ID];
+    	strcpy(job_id, g_queue_peek_head(work_queue));
+	    Job* job = g_hash_table_lookup(job_map, job_id);
+	    assert(job);
     	//check trans_limit
-    	if (trans_limit == 0 || ns->concur_jobs < trans_limit){
+        Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
+        assert(tl);
+    	if (tl->concur_jobs < tl->trans_limit){
     		//pop the first job from the queue
-    	    char job_id[MAX_LENGTH_ID];
-    	    strcpy(job_id, g_queue_pop_head(work_queue));
-    	    Job* job = g_hash_table_lookup(job_map, job_id);
-    	    assert(job);
+    	    g_queue_pop_head(work_queue);
     	    //pass ready job
     	    tw_event *e;
     	    datsim_msg *msg;
@@ -303,9 +309,13 @@ void handle_job_ready_event(
     m_remote.size = job->inputsize;
     printf("[%lf][source_host][%lu][StartSending]dest_host=%s;filesize=%lu\n",
     		now_sec(lp), lp->gid, job->dest_host, job->inputsize);
-    job->stats.start = now_sec(lp);
+    Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
+    assert(tl);
+    tl->concur_jobs += 1;
     ns->concur_jobs += 1;
-    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;concurency=%d\n", now_sec(lp), lp->gid, m->object_id,ns->concur_jobs);
+    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d\n",
+    		now_sec(lp), lp->gid, m->object_id, tl->dest_host,tl->concur_jobs);
+    job->stats.start = now_sec(lp);
     model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     return;
 }
@@ -317,10 +327,14 @@ void handle_job_done_event(source_host_state * ns,
 {
     char *job_id = m->object_id;
     ns->concur_jobs -= 1;
-    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;concurency=%d\n", now_sec(lp), lp->gid, job_id,ns->concur_jobs);
     Job* job = g_hash_table_lookup(job_map, job_id);
     ns->total_job += 1;
     ns->size_forward += job->inputsize;
+    Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
+    assert(tl);
+    tl->concur_jobs -= 1;
+    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;concurency=%d\n",
+    		now_sec(lp), lp->gid, job_id,tl->dest_host, tl->concur_jobs);
     //request the next job
     tw_event *e;
     datsim_msg *msg;

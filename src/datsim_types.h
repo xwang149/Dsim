@@ -75,6 +75,13 @@ struct Job {
     JobStat stats;
 };
 
+typedef struct Trans_Limit Trans_Limit;
+struct Trans_Limit {
+	char dest_host[MAX_LENGTH_ID];
+	int trans_limit;
+	int concur_jobs;
+};
+
 /* end of data structure for DATSIM elements*/
 
 #endif	/* DATSIM_TYPES_H */

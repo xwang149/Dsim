@@ -32,7 +32,7 @@ extern double kickoff_epoch_time;
 extern char jobtrace_file_name[256];
 extern char output_file_name[256];
 extern float fraction;
-extern int trans_limit;
+extern char trans_limit_filename[256];
 
 extern const char* ready_string;
 
@@ -49,7 +49,7 @@ tw_stime us_to_ns(tw_stime ns);
 
 GHashTable* parse_jobtrace(char* jobtrace_path);
 void display_hash_table(GHashTable *table, char* name);
-
+GHashTable* parse_trans_limit(char* trans_limit_filename);
 
 #endif	/* UTIL_H */
 
