@@ -23,6 +23,7 @@
 
 //extern  GHashTable *work_map;
 extern  GHashTable *job_map;
+extern  GHashTable *task_map;
 extern  GHashTable *limit_map;
 
 /* common event, msg types*/
@@ -88,10 +89,11 @@ struct TaskStat {
 
 typedef struct Task Task;
 struct Task{
-    char id[MAX_LENGTH_ID];
-    int task_id;
+    char job_id[MAX_LENGTH_ID];
+    char task_id[MAX_LENGTH_ID];
     uint64_t tasksize;
-    char state[MAX_NAME_LENGTH_WKLD];
+    int taskNum;
+    int state;
     TaskStat stats;
 };
 

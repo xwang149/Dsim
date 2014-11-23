@@ -14,6 +14,7 @@
 #include "codes/lp-type-lookup.h"
 
 GHashTable *job_map=NULL;
+GHashTable *task_map=NULL;
 GHashTable *limit_map=NULL;
 static GQueue* job_queue;
 //static GQueue* priority_queue[MAX_PRIORITY];
@@ -57,6 +58,7 @@ static gint compare_function(gconstpointer a, gconstpointer b, gpointer data);
 static void calc_priority(tw_lp * lp, Job *job);
 static void handle_task_queue(Job* job);
 static tw_lpid plan_dest(Job* job);
+//static void display_queue(GQueue *queue);
 
 /* set up the function pointers for ROSS, as well as the size of the LP state
  * structure (NOTE: ROSS is in charge of event and state (de-)allocation) */
@@ -100,7 +102,7 @@ void init_source_host() {
     job_map = parse_jobtrace(jobtrace_file_name);
     reset_epoch_time();
     limit_map = parse_trans_limit(trans_limit_filename);
-
+    task_map = init_tasktable();
     printf("[source_host]checking jobs...done");
     //display_hash_table(job_map, "job_map");
     printf("[source_host]total valid jobs: %d\n", g_hash_table_size (job_map));
@@ -258,8 +260,8 @@ void handle_job_submit_event(
     char* job_id = m->object_id;
     Job* job = g_hash_table_lookup(job_map, job_id);
     assert(job);
-    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s;Priority=%f\n",
-    		now_sec(lp), lp->gid, job_id, job->priority);
+    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s\n",
+    		now_sec(lp), lp->gid, job_id);
     //check job priority and put job in proper queue, then request for scheduler
     g_queue_push_tail(job_queue, job->id);
     tw_event *e;
@@ -328,16 +330,8 @@ void handle_job_ready_event(
     //split job into sub tasks
     handle_task_queue(job);
 
-    //prepare to send the job to destination
-    datsim_msg m_remote;
-    tw_lpid dest_id = get_source_router_lp_id();
-    m_remote.event_type = SEND_REQ;
-    m_remote.src = lp->gid;
-    m_remote.next_hop = plan_dest(job);
-    strcpy(m_remote.object_id, job->id);
-    m_remote.size = job->inputsize;
-    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;filesize=%lu\n",
-    		now_sec(lp), lp->gid, job->dest_host, job->inputsize);
+    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu\n",
+    		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize);
     Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
     assert(tl);
     tl->concur_jobs += 1;
@@ -346,12 +340,24 @@ void handle_job_ready_event(
     		now_sec(lp), lp->gid, m->object_id, tl->host_id,tl->concur_jobs, job->priority);
     job->stats.start = now_sec(lp);
 
-    for (guint i=0; i< g_queue_get_length(task_queue); i++){
-    	Task *task = g_queue_pop_head(task_queue);
-    	strcpy(task->state, "transferring");
+    while (!g_queue_is_empty(task_queue)){
+    	char task_id[MAX_LENGTH_ID];
+    	strcpy(task_id, g_queue_pop_head(task_queue));
+	    Task* task = g_hash_table_lookup(task_map, task_id);
+	    assert(task);
+	    //prepare to send the task to destination
+	    datsim_msg m_remote;
+	    tw_lpid dest_id = get_source_router_lp_id();
+	    m_remote.event_type = SEND_REQ;
+	    m_remote.src = lp->gid;
+	    m_remote.next_hop = plan_dest(job);
+        strcpy(m_remote.object_id, task->task_id);
+        m_remote.size = task->tasksize;
+    	task->state = 1;
+    	task->stats.start = now_sec(lp);
     	model_net_event(net_id, "download", dest_id, task->tasksize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     }
-    model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+//    model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
 
 //    //request the next job
 //    tw_event *e;
@@ -403,13 +409,13 @@ static void handle_priority_queue(tw_lp * lp)
 		//sort the job according to its priority score
 		g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
 
-		for (guint i=0; i< g_queue_get_length(job_queue); i++){
-	    	char job_id[MAX_LENGTH_ID];
-	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
-		    Job* job = g_hash_table_lookup(job_map, job_id);
-		    assert(job);
+//		for (guint i=0; i< g_queue_get_length(job_queue); i++){
+//	    	char job_id[MAX_LENGTH_ID];
+//	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
+//		    Job* job = g_hash_table_lookup(job_map, job_id);
+//		    assert(job);
 //		    printf("[%lf][source_host][%lu][queue]%lf\n",now_sec(lp), lp->gid, job->priority);
-		}
+//		}
 	}
 }
 
@@ -433,7 +439,7 @@ static void calc_priority(tw_lp * lp, Job *job)
 {
 	int pri=0;
 	double wait_time = now_sec(lp) - job->stats.created;
-	double ideal_time = (double) job->inputsize / job->bandwidth;
+	double ideal_time = (double) job->inputsize / job->bandwidth + 3*ns_tw_lookahead;
 	double frac = 1 - (1/(wait_time / ideal_time + 1));;
 	if (job->deadline == 0){
 		while (pri < MAX_PRIORITY && wait_time >= ideal_time) {
@@ -452,9 +458,30 @@ static void calc_priority(tw_lp * lp, Job *job)
 	}
 }
 
+
 static void handle_task_queue(Job* job)
 {
-
+	int threadNum  = 2 * (1 + (long) job->priority);
+	if (threadNum > 2*(MAX_PRIORITY+1))	threadNum = 2*(MAX_PRIORITY+1);
+	uint64_t size = job->inputsize;
+	uint64_t chunk = job->inputsize / threadNum;
+	for (int i=0; i < threadNum; i++){
+		Task *task = NULL;
+	    task = malloc(sizeof(Task));
+	    memset(task, 0, sizeof(Task));
+		task->tasksize = size - (threadNum-i-1)*chunk;
+		size = size - task->tasksize;
+		strcpy(task->job_id, job->id);
+		sprintf(task->task_id, "%s_%d", job->id, i);
+		task->state = 0;
+		task->taskNum = i;
+		job->task_states[i] = 0;
+		g_hash_table_insert(task_map, task->task_id, task);
+		g_queue_push_tail(task_queue, task->task_id);
+	}
+	//display_queue(task_queue, ">>>");
+	job->num_tasks = threadNum;
+	job->remain_tasks = threadNum;
 }
 
 static tw_lpid plan_dest(Job* job)
@@ -462,3 +489,14 @@ static tw_lpid plan_dest(Job* job)
 	char *endptr;
 	return strtoll(job->dest_host, &endptr, 10);
 }
+
+//static void display_queue(GQueue *queue)
+//{
+//    int len = g_queue_get_length(queue);
+//    int i = 0;
+//
+//    for (i = 0; i < len; i++) {
+//        printf("%s ", g_queue_peek_nth(queue, i));
+//    }
+//    printf("\n");
+//}

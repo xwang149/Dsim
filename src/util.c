@@ -108,6 +108,12 @@ GHashTable* parse_jobtrace(char* jobtrace_path) {
     return job_map;
 }
 
+GHashTable* init_tasktable() {
+    GHashTable *task_map = NULL;
+    task_map =  g_hash_table_new_full(g_str_hash, g_str_equal, free_key, free_value);
+    return task_map;
+}
+
 Job* parse_job_by_trace(gchar* line) {
     Job* jb=NULL;
     jb = malloc(sizeof(Job));
@@ -172,5 +178,4 @@ GHashTable* parse_trans_limit(char* trans_limit_filename) {
     }
     return limit_map;
 }
-
 

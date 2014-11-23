@@ -50,6 +50,7 @@ tw_stime us_to_ns(tw_stime ns);
 GHashTable* parse_jobtrace(char* jobtrace_path);
 void display_hash_table(GHashTable *table, char* name);
 GHashTable* parse_trans_limit(char* trans_limit_filename);
+GHashTable* init_tasktable();
 
 #endif	/* UTIL_H */
 

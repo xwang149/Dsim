@@ -164,26 +164,39 @@ void handle_kick_off_event(
     return;
 }
 
-/* input downloaded -> start run command*/
+/* data downloaded */
 void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp) {
     if (strlen(m->object_id)>0) {
-        char* jobid = m->object_id;
-        Job* job = g_hash_table_lookup(job_map, jobid);
-        job->stats.end = now_sec(lp);
-        double data_move_time_sec = job->stats.end - job->stats.start;
-        strcpy(job->state, "done");
-        fprintf(event_log, "%lf;dest_host;%lu;TD;jobid=%s;download_size=%lu;submit_time=%lf;start_time=%lf;end_time=%lf\n",
-        		now_sec(lp),
-                lp->gid,
-                jobid,
-                job->inputsize,
-                job->stats.created,
-                job->stats.start,
-                job->stats.end);
-        ns->data_download_time += data_move_time_sec;
-        ns->total_processed += 1;
-        send_received_notification(jobid, lp);
+        char* taskid = m->object_id;
+        Task* task = g_hash_table_lookup(task_map, taskid);
+        assert(task);
+        task->stats.end = now_sec(lp);
+        double data_move_time_sec = task->stats.end - task->stats.start;
+        task->state = 2;
+        printf("[%lf][dest_host][%lu][Downloaded]taskid=%s;tasksize=%lu;downloadtime=%lf\n",
+            		now_sec(lp), lp->gid, task->task_id, task->tasksize, data_move_time_sec);
+
+        char *job_id = task->job_id;
+        Job* job = g_hash_table_lookup(job_map, job_id);
+        assert(job);
+        job->task_states[task->taskNum] = 2;
+        job->remain_tasks --;
+
+        //test if entire job has been downloaded
+        if (job->remain_tasks == 0){
+        	job->stats.end = now_sec(lp);
+        	double job_download_time_sec = job->stats.end - job->stats.start;
+            ns->data_download_time += job_download_time_sec;
+            ns->total_processed += 1;
+            fprintf(event_log, "%lf;dest_host;%lu;TD;jobid=%s;download_size=%lu;submit_time=%lf;start_time=%lf;end_time=%lf;"
+            				"deadline=%lf;bandwidth=%lu;thread=%d\n",
+                    		now_sec(lp), lp->gid, job_id,job->inputsize,job->stats.created,job->stats.start,job->stats.end,
+                    		job->deadline, job->bandwidth, job->num_tasks);
+            //send RECEIVE_ACK
+            send_received_notification(job_id, lp);
+        }
     }
+    return;
 }
 
 void send_received_notification(char* job_id, tw_lp *lp) {
