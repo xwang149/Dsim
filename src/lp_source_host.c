@@ -15,7 +15,9 @@
 
 GHashTable *job_map=NULL;
 GHashTable *limit_map=NULL;
-static GQueue* work_queue;
+static GQueue* job_queue;
+//static GQueue* priority_queue[MAX_PRIORITY];
+static GQueue* task_queue;
 
 /* define state*/
 typedef struct source_host_state source_host_state;
@@ -25,6 +27,7 @@ typedef struct source_host_state source_host_state;
 struct source_host_state {
     int total_job;
     int concur_jobs;
+    int trans_limit;
     long size_forward;
     tw_stime start_ts;    /* time that we started sending requests */
     tw_stime end_ts;      /* time that last request finished */
@@ -48,7 +51,11 @@ static void handle_schedule_req_event(source_host_state * ns, tw_bf * b, datsim_
 static void handle_job_ready_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
 static void handle_job_done_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
 
-/* plan the destination */
+/* supportive functions */
+static void handle_priority_queue(tw_lp * lp);
+static gint compare_function(gconstpointer a, gconstpointer b, gpointer data);
+static void calc_priority(tw_lp * lp, Job *job);
+static void handle_task_queue(Job* job);
 static tw_lpid plan_dest(Job* job);
 
 /* set up the function pointers for ROSS, as well as the size of the LP state
@@ -93,7 +100,7 @@ void init_source_host() {
     job_map = parse_jobtrace(jobtrace_file_name);
     reset_epoch_time();
     limit_map = parse_trans_limit(trans_limit_filename);
-    //printf("[awe_server]checking jobs...done, %d invalid jobs removed\n", ct);
+
     printf("[source_host]checking jobs...done");
     //display_hash_table(job_map, "job_map");
     printf("[source_host]total valid jobs: %d\n", g_hash_table_size (job_map));
@@ -122,10 +129,17 @@ void lpf_source_host_init(
     tw_stime kickoff_time;
 
     memset(ns, 0, sizeof(*ns));
-    work_queue = g_queue_new();
+    job_queue = g_queue_new();
+    task_queue = g_queue_new();
 
     /* skew each kickoff event slightly to help avoid event ties later on */
     kickoff_time = 0;
+
+    //set source host trans_limit
+    char lpid[MAX_LENGTH_ID] = "0";
+    Trans_Limit *tl = g_hash_table_lookup(limit_map, lpid);
+    assert(tl);
+    ns->trans_limit = tl->trans_limit;
 
     /* first create the event (time arg is an offset, not absolute time) */
     e = codes_event_new(lp->gid, kickoff_time, lp);
@@ -214,13 +228,18 @@ void handle_kick_off_event(
         Job* job = (Job*)value;
         tw_event *e;
         datsim_msg *msg;
-        tw_stime create_time, submit_time;
+        tw_stime create_time, submit_time, deadline=0;
         create_time =  us_to_ns(etime_to_stime(job->stats.created));
+        if (job->deadline !=0)
+        	deadline =  us_to_ns(etime_to_stime(job->deadline));
         submit_time = create_time + ns_tw_lookahead;
         if (fraction > 0 && fraction < 1.0) {
         	submit_time = submit_time * fraction;
+        	deadline = deadline * fraction;
         }
         job->stats.created = ns_to_s(create_time);
+        if (job->deadline !=0)
+        	job->deadline = ns_to_s(deadline);
         e = codes_event_new(lp->gid, submit_time, lp);
         msg = tw_event_data(e);
         msg->event_type = JOB_SUBMIT;
@@ -239,10 +258,10 @@ void handle_job_submit_event(
     char* job_id = m->object_id;
     Job* job = g_hash_table_lookup(job_map, job_id);
     assert(job);
-    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s\n",
-    		now_sec(lp), lp->gid, job_id);
-    //put job in the queue, and request for scheduler
-    g_queue_push_tail(work_queue, job->id);
+    fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s;Priority=%f\n",
+    		now_sec(lp), lp->gid, job_id, job->priority);
+    //check job priority and put job in proper queue, then request for scheduler
+    g_queue_push_tail(job_queue, job->id);
     tw_event *e;
     datsim_msg *msg;
     e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
@@ -263,18 +282,24 @@ static void handle_schedule_req_event(
 		fprintf(event_log, "%lf;source_host;%lu;WQ;jobid=%s\n",
 				now_sec(lp), lp->gid, m->object_id);
 	}
+
+	if (sched_policy == 1){
+		//reorder job queue by priority
+		handle_priority_queue(lp);
+	}
+
     //schedule policy
-    if (!g_queue_is_empty(work_queue)){
+    if (!g_queue_is_empty(job_queue)){
     	char job_id[MAX_LENGTH_ID];
-    	strcpy(job_id, g_queue_peek_head(work_queue));
+    	strcpy(job_id, g_queue_peek_head(job_queue));
 	    Job* job = g_hash_table_lookup(job_map, job_id);
 	    assert(job);
     	//check trans_limit
         Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
         assert(tl);
-    	if (tl->concur_jobs < tl->trans_limit){
+    	if (tl->concur_jobs < tl->trans_limit && ns->concur_jobs < ns->trans_limit){
     		//pop the first job from the queue
-    	    g_queue_pop_head(work_queue);
+    	    g_queue_pop_head(job_queue);
     	    //pass ready job
     	    tw_event *e;
     	    datsim_msg *msg;
@@ -299,6 +324,10 @@ void handle_job_ready_event(
     Job* job = g_hash_table_lookup(job_map, job_id);
     assert(job);
     fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
+
+    //split job into sub tasks
+    handle_task_queue(job);
+
     //prepare to send the job to destination
     datsim_msg m_remote;
     tw_lpid dest_id = get_source_router_lp_id();
@@ -313,10 +342,25 @@ void handle_job_ready_event(
     assert(tl);
     tl->concur_jobs += 1;
     ns->concur_jobs += 1;
-    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d\n",
-    		now_sec(lp), lp->gid, m->object_id, tl->dest_host,tl->concur_jobs);
+    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d;priority=%f\n",
+    		now_sec(lp), lp->gid, m->object_id, tl->host_id,tl->concur_jobs, job->priority);
     job->stats.start = now_sec(lp);
+
+    for (guint i=0; i< g_queue_get_length(task_queue); i++){
+    	Task *task = g_queue_pop_head(task_queue);
+    	strcpy(task->state, "transferring");
+    	model_net_event(net_id, "download", dest_id, task->tasksize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+    }
     model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+
+//    //request the next job
+//    tw_event *e;
+//    datsim_msg *msg;
+//    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
+//    msg = tw_event_data(e);
+//    msg->event_type = SCHED_REQ;
+//    strcpy(msg->object_id, "NAN");
+//    tw_event_send(e);
     return;
 }
 
@@ -334,7 +378,7 @@ void handle_job_done_event(source_host_state * ns,
     assert(tl);
     tl->concur_jobs -= 1;
     fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;concurency=%d\n",
-    		now_sec(lp), lp->gid, job_id,tl->dest_host, tl->concur_jobs);
+    		now_sec(lp), lp->gid, job_id,tl->host_id, tl->concur_jobs);
     //request the next job
     tw_event *e;
     datsim_msg *msg;
@@ -343,6 +387,74 @@ void handle_job_done_event(source_host_state * ns,
     msg->event_type = SCHED_REQ;
     strcpy(msg->object_id, "NAN");
     tw_event_send(e);
+}
+
+static void handle_priority_queue(tw_lp * lp)
+{
+	if (!g_queue_is_empty(job_queue)){
+		//calculate priority for each job in the queue
+		for (guint i=0; i< g_queue_get_length(job_queue); i++){
+	    	char job_id[MAX_LENGTH_ID];
+	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
+		    Job* job = g_hash_table_lookup(job_map, job_id);
+		    assert(job);
+		    calc_priority(lp, job);
+		}
+		//sort the job according to its priority score
+		g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
+
+		for (guint i=0; i< g_queue_get_length(job_queue); i++){
+	    	char job_id[MAX_LENGTH_ID];
+	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
+		    Job* job = g_hash_table_lookup(job_map, job_id);
+		    assert(job);
+//		    printf("[%lf][source_host][%lu][queue]%lf\n",now_sec(lp), lp->gid, job->priority);
+		}
+	}
+}
+
+static gint compare_function(gconstpointer a, gconstpointer b, gpointer data)
+{
+	char job_id1[MAX_LENGTH_ID], job_id2[MAX_LENGTH_ID];
+	strcpy(job_id1, (char*) a);
+	strcpy(job_id2, (char*) b);
+    Job* job1 = g_hash_table_lookup(job_map, job_id1);
+    Job* job2 = g_hash_table_lookup(job_map, job_id2);
+    assert(job1); assert(job2);
+    if (job1->priority < job2->priority)
+    	return 1;
+    else if (job1->priority > job2->priority)
+    	return -1;
+    else
+    	return 0;
+}
+
+static void calc_priority(tw_lp * lp, Job *job)
+{
+	int pri=0;
+	double wait_time = now_sec(lp) - job->stats.created;
+	double ideal_time = (double) job->inputsize / job->bandwidth;
+	double frac = 1 - (1/(wait_time / ideal_time + 1));;
+	if (job->deadline == 0){
+		while (pri < MAX_PRIORITY && wait_time >= ideal_time) {
+			pri++;
+			wait_time = wait_time - ideal_time;
+		}
+		job->priority = pri + frac;
+	}
+	else {
+		double stall_time = job->deadline - MAX_PRIORITY * ideal_time;
+		while (pri < MAX_PRIORITY && wait_time >= ideal_time + stall_time) {
+			pri++;
+			wait_time = wait_time - ideal_time;
+		}
+		job->priority = pri + frac;
+	}
+}
+
+static void handle_task_queue(Job* job)
+{
+
 }
 
 static tw_lpid plan_dest(Job* job)

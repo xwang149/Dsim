@@ -8,8 +8,10 @@
 int net_id = 0;
 FILE *event_log = NULL;
 
+
 float fraction = 1.0;
 int trans_limit = 0;
+int sched_policy = 0;
 
 //static Workunit* parse_workunit_by_trace(gchar * line);
 static Job* parse_job_by_trace(gchar *line);
@@ -131,7 +133,13 @@ Job* parse_job_by_trace(gchar* line) {
         	strcpy(jb->dest_host, val);
         } else if (strcmp(key, "size")==0) {
         	jb->inputsize = strtoll(val, &endptr, 10);
+        } else if (strcmp(key, "bandwidth")==0) {
+        	jb->bandwidth = atol(val);
+        } else if (strcmp(key, "deadline")==0) {
+        	if (val != NULL)
+        		jb->deadline = atol(val);
         }
+
     }
     strcpy(jb->state, "raw");
     //print_job(jb);
@@ -157,10 +165,10 @@ GHashTable* parse_trans_limit(char* trans_limit_filename) {
         gchar ** parts = NULL;
         g_strstrip((gchar*)line);
         parts = g_strsplit((gchar*)line,"=", 5);
-        strcpy(tl->dest_host, parts[0]);
+        strcpy(tl->host_id, parts[0]);
         tl->trans_limit = atoi(parts[1]);
         memset(line, 0, sizeof(line));
-        g_hash_table_insert(limit_map, tl->dest_host, tl);
+        g_hash_table_insert(limit_map, tl->host_id, tl);
     }
     return limit_map;
 }

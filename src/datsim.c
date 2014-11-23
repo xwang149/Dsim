@@ -24,7 +24,7 @@
 static char conf_file_name[256]={0};
 char jobtrace_file_name[256]={0};
 char output_file_name[256]={0};
-int sched_policy = 0;
+int sched_policy_arg = 0;
 int fraction_arg = 0;
 char trans_limit_filename[256] = {0};
 /* this struct contains default parameters used by ROSS, as well as
@@ -36,7 +36,7 @@ const tw_optdef app_opt [] =
     TWOPT_CHAR("codes-config", conf_file_name, "name of codes configuration file"),
     TWOPT_CHAR("jobtrace", jobtrace_file_name, "job trace"),
     TWOPT_CHAR("output", output_file_name, "output file name"),
-    TWOPT_UINT("sched-policy", sched_policy, "scheduling policy"),
+    TWOPT_UINT("sched-policy", sched_policy_arg, "scheduling policy, 0 for non-priority, 1 for priority"),
     TWOPT_UINT("fraction", fraction_arg, "fraction of job arrival intervals (1-99, meaning 1%-99%)"),
     TWOPT_CHAR("trans-limit", trans_limit_filename, "file name for transfer limitation"),
     {TWOPT_END()}
@@ -87,6 +87,9 @@ int main(
         fprintf(stderr, "Expected \"trans_limit\" option, please see --help.\n");
         MPI_Finalize();
         return 1;
+    }
+    if (sched_policy_arg != 0) {
+    	sched_policy = 1;
     }
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);

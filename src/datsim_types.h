@@ -19,11 +19,11 @@
 #define MAX_NUM_TASKS 30
 
 #define TIMER_CHECKOUT_INTERVAL 100
-
-
+#define MAX_PRIORITY 3
 
 //extern  GHashTable *work_map;
 extern  GHashTable *job_map;
+extern  GHashTable *limit_map;
 
 /* common event, msg types*/
 
@@ -68,16 +68,36 @@ struct Job {
     char source_host[MAX_NAME_LENGTH_WKLD];
     char dest_host[MAX_NAME_LENGTH_WKLD];
     uint64_t inputsize;
+    uint64_t bandwidth;
     int batched;
     double deadline;
-    int priority;
+    double priority;
+    int num_tasks;
+    int remain_tasks;
+    int task_states[MAX_NUM_TASKS];  /* 0=pending, 1=transferring, 2=completed*/
     char state[MAX_LENGTH_STATE];
     JobStat stats;
 };
 
+typedef struct TaskStat TaskStat;
+struct TaskStat {
+    double created;
+    double start;
+    double end;
+};
+
+typedef struct Task Task;
+struct Task{
+    char id[MAX_LENGTH_ID];
+    int task_id;
+    uint64_t tasksize;
+    char state[MAX_NAME_LENGTH_WKLD];
+    TaskStat stats;
+};
+
 typedef struct Trans_Limit Trans_Limit;
 struct Trans_Limit {
-	char dest_host[MAX_LENGTH_ID];
+	char host_id[MAX_LENGTH_ID];
 	int trans_limit;
 	int concur_jobs;
 };
