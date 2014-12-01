@@ -439,7 +439,8 @@ static void calc_priority(tw_lp * lp, Job *job)
 {
 	int pri=0;
 	double wait_time = now_sec(lp) - job->stats.created;
-	double ideal_time = (double) job->inputsize / job->bandwidth + 3*ns_tw_lookahead;
+	double ideal_time = (double) job->inputsize / job->bandwidth + 5*ns_to_s(ns_tw_lookahead);
+	if (ideal_time < 0.5) ideal_time = 0.5;
 	double frac = 1 - (1/(wait_time / ideal_time + 1));;
 	if (job->deadline == 0){
 		while (pri < MAX_PRIORITY && wait_time >= ideal_time) {
@@ -449,26 +450,37 @@ static void calc_priority(tw_lp * lp, Job *job)
 		job->priority = pri + frac;
 	}
 	else {
-		double stall_time = job->deadline - MAX_PRIORITY * ideal_time;
+		double stall_time = job->deadline - PREDEADLINE * ideal_time;
 		while (pri < MAX_PRIORITY && wait_time >= ideal_time + stall_time) {
 			pri++;
 			wait_time = wait_time - ideal_time;
 		}
 		job->priority = pri + frac;
 	}
+	Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
+	assert(tl);
+	if (tl->concur_jobs < tl->trans_limit)
+		job->priority += MAX_PRIORITY/2;
 }
 
 
 static void handle_task_queue(Job* job)
 {
-	int threadNum  = 2 * (1 + (long) job->priority);
-	if (threadNum > 2*(MAX_PRIORITY+1))	threadNum = 2*(MAX_PRIORITY+1);
+	printf("priority is %f\n", job->priority);
+	int threadNum;
+	if (job->inputsize >= 1048576 ) {
+		threadNum  =  (long) (job->priority/2)+1;
+		if (threadNum > 8)	threadNum = 8;
+	} else {
+		threadNum = 1;
+	}
+	printf("thread# is %d\n", threadNum);
 	uint64_t size = job->inputsize;
 	uint64_t chunk = job->inputsize / threadNum;
 	for (int i=0; i < threadNum; i++){
 		Task *task = NULL;
-	    task = malloc(sizeof(Task));
-	    memset(task, 0, sizeof(Task));
+		task = malloc(sizeof(Task));
+		memset(task, 0, sizeof(Task));
 		task->tasksize = size - (threadNum-i-1)*chunk;
 		size = size - task->tasksize;
 		strcpy(task->job_id, job->id);

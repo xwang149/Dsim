@@ -19,7 +19,8 @@
 #define MAX_NUM_TASKS 30
 
 #define TIMER_CHECKOUT_INTERVAL 100
-#define MAX_PRIORITY 3
+#define MAX_PRIORITY 10
+#define PREDEADLINE 3
 
 //extern  GHashTable *work_map;
 extern  GHashTable *job_map;

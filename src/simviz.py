@@ -12,6 +12,9 @@ import time
 from sets import Set
 from optparse import OptionParser
 
+max_uscore = 10
+pre_deadline = 3
+
 def parse_event_log(filename):
     '''parse event log for job stats'''
     
@@ -43,9 +46,9 @@ def parse_event_log(filename):
             job_stats[jobid]["bandwidth"] = float(vals["bandwidth"])
             job_stats[jobid]["wait"] = job_stats[jobid]["start"] - job_stats[jobid]["submit"]
             job_stats[jobid]["resp"] = job_stats[jobid]["end"] - job_stats[jobid]["submit"]
-            job_stats[jobid]["idealtime"] = job_stats[jobid]["inputsize"] / job_stats[jobid]["bandwidth"] + 0.003
-            job_stats[jobid]["slowdown"] = job_stats[jobid]["resp"] / job_stats[jobid]["idealtime"]        
-        elif parts[1] == "source_host":
+            job_stats[jobid]["idealtime"] = max(0.5, job_stats[jobid]["inputsize"] / job_stats[jobid]["bandwidth"] + 0.005)
+            job_stats[jobid]["slowdown"] = (job_stats[jobid]["end"] - job_stats[jobid]["start"]) / job_stats[jobid]["idealtime"]
+            job_stats[jobid]["resp_slow"] = job_stats[jobid]["resp"] / job_stats[jobid]["idealtime"]
             event_type=parts[3]
             if event_type in ["TS", "JD"]:
                 t = float(parts[0])
@@ -61,24 +64,21 @@ def parse_event_log(filename):
 def calc_utility(job_stats):
     for jobid in job_stats.keys():
         if job_stats[jobid]["deadline"] == 0:
-            deadtime = max(5, 10*job_stats[jobid]["idealtime"])
-            if(job_stats[jobid]["resp"] <= job_stats[jobid]["idealtime"]):
-                # utilityscore.append(100.0)
-                job_stats[jobid]["utilityscore"] = 100
-            elif (job_stats[jobid]["resp"] < deadtime):
-                y1 = 100*(deadtime - job_stats[jobid]["resp"])/(deadtime-job_stats[jobid]["idealtime"])
+            deadtime = max(5, max_uscore*job_stats[jobid]["idealtime"])
+            if (job_stats[jobid]["resp"] < deadtime):
+                y1 = 100*(deadtime - job_stats[jobid]["resp"])/deadtime
                 # utilityscore.append(y1)
                 job_stats[jobid]["utilityscore"] = y1
             else:
                 # utilityscore.append(0)
                 job_stats[jobid]["utilityscore"] = 0
         else:
-            deadtime = max(5, 1.5*job_stats[jobid]["deadline"])
-            if(job_stats[jobid]["resp"] <= job_stats[jobid]["deadline"]):
+            deadtime = max(5, (max_uscore - pre_deadline)*job_stats[jobid]["idealtime"]+job_stats[jobid]["deadline"]-job_stats[jobid]["submit"])
+            if(job_stats[jobid]["resp"] <= job_stats[jobid]["deadline"]-job_stats[jobid]["submit"]):
                 # utilityscore.append(100.0)
                 job_stats[jobid]["utilityscore"] = 100
             elif (job_stats[jobid]["resp"] < deadtime):
-                y2 = 100*(deadtime - job_stats[jobid]["resp"])/(deadtime-job_stats[jobid]["deadline"])
+                y2 = 100*(deadtime - job_stats[jobid]["resp"])/(deadtime-job_stats[jobid]["deadline"]+job_stats[jobid]["submit"])
                 # utilityscore.append(y2)
                 job_stats[jobid]["utilityscore"] = y2
             else:
@@ -111,9 +111,10 @@ def show_job_metrics(job_metrics):
     avg_wait = sum(job_metrics["wait_t"]) / len(job_metrics["wait_t"])
     avg_resp = sum(job_metrics["resp"]) / len(job_metrics["resp"])
     avg_slow = sum(job_metrics["slowdown"]) / len(job_metrics["slowdown"])
-    avg_utility = sum(job_metrics["utility"]) / len(job_metrics["utility"])
-    sys_throughput = job_metrics["total_data"] / job_metrics["makespan"] / 1000000
-    print "[source_host]average waiting time (sec) = %f average response time (sec)=%f, avg slowdown =%f, avg utility =%f, sys througput (MB/sec)=%f\n" % (avg_wait, avg_resp, avg_slow, avg_utility, sys_throughput)
+    # avg_utility = sum(job_metrics["utility"]) / len(job_metrics["utility"])
+    agg_utility = np.dot(job_metrics["utility"], job_metrics["resp"])
+    sys_throughput = job_metrics["total_data"] / job_metrics["makespan"] / 1048576
+    print "[source_host]average waiting time (sec) = %f average response time (sec)=%f, avg slowdown =%f, agg utility =%f, sys througput (MB/sec)=%f\n" % (avg_wait, avg_resp, avg_slow, agg_utility, sys_throughput)
 
 def calc_dest_metrics(job_stats):
     dest_metrics= {}
@@ -147,10 +148,37 @@ def show_dest_metrics(dest_metrics):
         avg_wait = sum(stats["wait_t"]) / len(stats["wait_t"])
         avg_resp = sum(stats["resp"]) / len(stats["resp"])
         avg_slow = sum(stats["slowdown"]) / len(stats["slowdown"])
-        band = stats["bandwidth"] / 1000000
-        avg_utility = sum(stats["utilityscore"]) / len(stats["utilityscore"])
-        dest_throughput = stats["total_data"] / stats["makespan"] / 1000000
-        print "[dest_host][%s]average waiting time (sec) = %f average response time (sec)= %f, avg slowdown = %f, bandwidth (MB/sec)= %f, avg_utility =%f, sys througput (MB/sec)= %f\n" % (key, avg_wait, avg_resp, avg_slow, band, avg_utility, dest_throughput)
+        band = stats["bandwidth"] / 1048576
+        # avg_utility = sum(stats["utilityscore"]) / len(stats["utilityscore"])
+        agg_utility = np.dot(stats["utilityscore"], stats["resp"])
+        dest_throughput = stats["total_data"] / stats["makespan"] / 1048576
+        print "[dest_host][%s]average waiting time (sec) = %f average response time (sec)= %f, avg slowdown = %f, bandwidth (MB/sec)= %f, agg_utility =%f, sys througput (MB/sec)= %f\n" % (key, avg_wait, avg_resp, avg_slow, band, agg_utility, dest_throughput)
+
+def generate_csv(job_stats, table_name):
+
+    outfile = open(table_name, "w")
+    
+    for jobid in job_stats.keys():    
+        dest_id = job_stats[jobid]["dest_id"] 
+        size = job_stats[jobid]["inputsize"]
+        submit_time = job_stats[jobid]["submit"]
+        start_time = job_stats[jobid]["start"]
+        end_time = job_stats[jobid]["end"]
+        deadline = job_stats[jobid]["deadline"]
+        bandwidth = job_stats[jobid]["bandwidth"]
+        wait = job_stats[jobid]["wait"]
+        resp = job_stats[jobid]["resp"]
+        run = job_stats[jobid]["end"] - job_stats[jobid]["start"]
+        ideal = job_stats[jobid]["idealtime"]
+        slow = job_stats[jobid]["slowdown"]
+        resp_slow = job_stats[jobid]["resp_slow"]
+        utility = job_stats[jobid]["utilityscore"]
+        
+        line = ("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n") % (jobid, dest_id, size, submit_time, start_time, end_time, deadline, bandwidth, wait, resp, run, ideal, slow, resp_slow, utility)
+        outfile.write(line)   
+    outfile.close()
+
+
 
 def plot_concurrency(trans_stats, filename, fig_num):
     plt.figure(fig_num)
@@ -282,14 +310,16 @@ if __name__ == "__main__":
     job_metrics = calc_job_stats(job_stats)
     show_job_metrics(job_metrics)
 
+    generate_csv(job_stats, outfile+"_jobstats.csv")
+
     dest_metrics  = calc_dest_metrics(job_stats)
     show_dest_metrics(dest_metrics)
 
-    plot_concurrency(trans_stats, opts.eventlog, 1)
-    plot_job_load(job_stats, "../results/job_load.png", 2)
+    # plot_concurrency(trans_stats, opts.eventlog, 1)
+    # plot_job_load(job_stats, "../results/job_load.png", 2)
 
-    resp_time, run_time, utility = prepare_bins(dest_metrics)
-    plot_cdf(resp_time, 3, "resp_time", outfile+"_resp_cdf.png")
-    plot_cdf(run_time, 4, "run_time", outfile+"_runtime_cdf.png")
-    plot_cdf(utility, 5, "utility", outfile+"_utility_cdf.png")
+    # resp_time, run_time, utility = prepare_bins(dest_metrics)
+    # plot_cdf(resp_time, 3, "resp_time", outfile+"_resp_cdf.png")
+    # plot_cdf(run_time, 4, "run_time", outfile+"_runtime_cdf.png")
+    # plot_cdf(utility, 5, "utility", outfile+"_utility_cdf.png")
     exit()

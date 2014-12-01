@@ -13,8 +13,8 @@ float fraction = 1.0;
 int trans_limit = 0;
 int sched_policy = 0;
 
-//static Workunit* parse_workunit_by_trace(gchar * line);
 static Job* parse_job_by_trace(gchar *line);
+static void parse_dest_bandwidth(Job *job, char *bandwidth_filename);
 
 /*serve as MAX epoch time, Sat, 20 Nov 2286 17:46:39 GMT*/
 double kickoff_epoch_time = 9999999999999999;
@@ -139,17 +139,35 @@ Job* parse_job_by_trace(gchar* line) {
         	strcpy(jb->dest_host, val);
         } else if (strcmp(key, "size")==0) {
         	jb->inputsize = strtoll(val, &endptr, 10);
-        } else if (strcmp(key, "bandwidth")==0) {
-        	jb->bandwidth = atol(val);
         } else if (strcmp(key, "deadline")==0) {
         	if (val != NULL)
         		jb->deadline = atol(val);
         }
-
     }
+    parse_dest_bandwidth(jb, "bw-3sites.conf");
     strcpy(jb->state, "raw");
     //print_job(jb);
     return jb;
+}
+
+static void parse_dest_bandwidth(Job *job, char *bandwidth_filename){
+    FILE *f;
+    char line[MAX_LEN_TRACE_LINE];
+    f = fopen(bandwidth_filename, "r");
+    if (f == NULL) {
+    	perror(bandwidth_filename);
+    	exit(1);
+    }
+    char dest[MAX_LENGTH_ID];
+    while ( fgets ( line, sizeof(line), f ) != NULL ){ /* read a line */
+    	gchar ** parts = NULL;
+    	g_strstrip((gchar*)line);
+    	parts = g_strsplit((gchar*)line,"=", 5);
+        strcpy(dest, parts[0]);
+        if (strcmp(job->dest_host, dest) == 0)
+        	job->bandwidth = atoi(parts[1])*1024*1024;
+        memset(line, 0, sizeof(line));
+    }
 }
 
 
