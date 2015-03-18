@@ -27,6 +27,6 @@ echo "run with priority on case2"
 ./datsim --codes-config=datsim_wan_three_site.conf --jobtrace=jobs.trace --synch=1 --trans-limit=trans-limit-case2.conf --sched-policy=2 --output=../results/datsim_output_case2_P_2x.log > ../results/case2_P_2x.output
 # ./simviz.py -e ../results/datsim_output_case2_P_2x.log
 
-echo "run with utility on case2"
-./datsim --codes-config=datsim_wan_three_site.conf --jobtrace=jobs.trace --synch=1 --trans-limit=trans-limit-case2.conf --sched-policy=1 --output=../results/datsim_output_case2_U_2x.log > ../results/case2_U_2x.output
+#echo "run with utility on case2"
+#./datsim --codes-config=datsim_wan_three_site.conf --jobtrace=jobs.trace --synch=1 --trans-limit=trans-limit-case2.conf --sched-policy=1 --output=../results/datsim_output_case2_U_2x.log > ../results/case2_U_2x.output
 # ./simviz.py -e ../results/datsim_output_case2_U_2x.log 

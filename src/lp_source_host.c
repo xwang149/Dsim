@@ -16,7 +16,7 @@
 GHashTable *job_map=NULL;
 GHashTable *task_map=NULL;
 GHashTable *limit_map=NULL;
-static GQueue* dest1_queue, dest2_queue, dest3_queue;
+static GQueue *dest1_queue, *dest2_queue, *dest3_queue;
 //static GQueue* priority_queue[MAX_PRIORITY];
 static GQueue* task_queue;
 
@@ -322,7 +322,7 @@ static void handle_schedule_req_event(
 	}
 
 	if (sched_policy == 1 ){
-		//reorder job queue by weighted queuing time
+		//utility based handling
 		handle_utility_queue(lp);
 	}
     return;
@@ -340,12 +340,6 @@ void handle_job_ready_event(
     assert(job);
     fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
 
-    //split job into sub tasks
-	if (sched_policy == 1 ){
-		//utility based handling
-		handle_priority_queue(lp);
-	}
-
     printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu\n",
     		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize);
     Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
@@ -354,25 +348,46 @@ void handle_job_ready_event(
     ns->concur_jobs += 1;
     fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d;priority=%f\n",
     		now_sec(lp), lp->gid, m->object_id, tl->host_id,tl->concur_jobs, job->priority);
-    job->stats.start = now_sec(lp);
 
-    while (!g_queue_is_empty(task_queue)){
-    	char task_id[MAX_LENGTH_ID];
-    	strcpy(task_id, g_queue_pop_head(task_queue));
-	    Task* task = g_hash_table_lookup(task_map, task_id);
-	    assert(task);
-	    //prepare to send the task to destination
+    if (sched_policy != 1) {
+    	//send a job
 	    datsim_msg m_remote;
 	    tw_lpid dest_id = get_source_router_lp_id();
 	    m_remote.event_type = SEND_REQ;
 	    m_remote.src = lp->gid;
 	    m_remote.next_hop = plan_dest(job);
-        strcpy(m_remote.object_id, task->task_id);
-        m_remote.size = task->tasksize;
-    	task->state = 1;
-    	task->stats.start = now_sec(lp);
-    	model_net_event(net_id, "download", dest_id, task->tasksize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+        strcpy(m_remote.object_id, job->id);
+        m_remote.size = job->inputsize;
+        job->stats.start = now_sec(lp);
+    	 model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     }
+    //split job into sub tasks
+    else if (sched_policy == 1 ){
+		//utility based handling
+		handle_task_queue(lp);
+
+		job->stats.start = now_sec(lp);
+	    //send tasks in task queue
+		while (!g_queue_is_empty(task_queue)){
+	    	char task_id[MAX_LENGTH_ID];
+	    	strcpy(task_id, g_queue_pop_head(task_queue));
+		    Task* task = g_hash_table_lookup(task_map, task_id);
+		    assert(task);
+		    //prepare to send the task to destination
+		    datsim_msg m_remote;
+		    tw_lpid dest_id = get_source_router_lp_id();
+		    m_remote.event_type = SEND_REQ;
+		    m_remote.src = lp->gid;
+		    m_remote.next_hop = plan_dest(job);
+	        strcpy(m_remote.object_id, task->task_id);
+	        m_remote.size = task->tasksize;
+	    	task->state = 1;
+	    	task->stats.start = now_sec(lp);
+	    	model_net_event(net_id, "download", dest_id, task->tasksize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+	    }
+
+	}
+
 //    model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
 
 //    //request the next job
@@ -463,35 +478,8 @@ static void calc_priority(tw_lp * lp, Job *job)
 {
 	int pri=0;
 	double wait_time = (double) now_sec(lp) - job->stats.created;
-	double ideal_time = (double)5*ns_to_s(ns_tw_lookahead) + (double) job->inputsize / job->bandwidth;
-	double frac = 1 - (1/(wait_time / ideal_time + 1));
-
-	if (job->deadline == 0){
-		while (pri < MAX_PRIORITY && wait_time >= ideal_time) {
-			pri++;
-			wait_time = wait_time - ideal_time;
-		}
-		if (sched_policy == 1)
-			job->priority = pri + frac;
-		else if (sched_policy == 2)
-			job->priority = frac;
-	}
-	else {
-		double stall_time = job->deadline - PREDEADLINE * ideal_time;
-		while (pri < MAX_PRIORITY && wait_time >= ideal_time + stall_time) {
-			pri++;
-			wait_time = wait_time - ideal_time;
-		}
-		if (sched_policy == 1)
-			job->priority = pri + frac;
-		else if (sched_policy == 2)
-			job->priority = frac;
-	}
-
-	Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
-	assert(tl);
-	if (tl->concur_jobs < tl->trans_limit)
-		job->priority += MAX_PRIORITY/2;
+	double mbytes = (double) job->inputsize / 1024/1024;
+	job->priority = wait_time/mbytes;
 }
 
 
@@ -542,15 +530,12 @@ static GQueue* map_to_queue(Job* job, int i)
 		else
 			return dest3_queue;
 	}
-	else{
-		if (i==0)
-			return dest1_queue;
-		else if (i==1)
-			return dest2_queue;
-		else
-			return dest3_queue;
-	}
-
+	else if (i==0)
+		return dest1_queue;
+	else if (i==1)
+		return dest2_queue;
+	else
+		return dest3_queue;
 }
 
 //static void display_queue(GQueue *queue)
