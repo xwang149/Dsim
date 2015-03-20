@@ -176,9 +176,9 @@ void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m,
         ns->data_download_time += job_download_time_sec;
         ns->total_processed += 1;
         fprintf(event_log, "%lf;dest_host;%lu;TD;jobid=%s;download_size=%lu;submit_time=%lf;start_time=%lf;end_time=%lf;"
-        				"deadline=%lf;bandwidth=%lu;thread=%d\n",
+        				"deadline=%lf;bandwidth=%lu;thread=%d;t_dead=%lf\n",
                 		now_sec(lp), lp->gid, job_id,job->inputsize,job->stats.created,job->stats.start,job->stats.end,
-                		job->deadline, job->bandwidth, job->num_tasks);
+                		job->deadline, job->bandwidth, job->num_tasks,job->t_dead);
         //send RECEIVE_ACK
         send_received_notification(job_id, lp);
 	}
@@ -198,6 +198,10 @@ void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m,
         job->task_states[task->taskNum] = 2;
         job->remain_tasks --;
 
+        if (task->taskNum == 0){
+        	job->stats.start = task->stats.start;
+        }
+
         //test if entire job has been downloaded
         if (job->remain_tasks == 0){
         	job->stats.end = now_sec(lp);
@@ -205,9 +209,9 @@ void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m,
             ns->data_download_time += job_download_time_sec;
             ns->total_processed += 1;
             fprintf(event_log, "%lf;dest_host;%lu;TD;jobid=%s;download_size=%lu;submit_time=%lf;start_time=%lf;end_time=%lf;"
-            				"deadline=%lf;bandwidth=%lu;thread=%d\n",
+            				"deadline=%lf;bandwidth=%lu;thread=%d;t_dead=%lf\n",
                     		now_sec(lp), lp->gid, job_id,job->inputsize,job->stats.created,job->stats.start,job->stats.end,
-                    		job->deadline, job->bandwidth, job->num_tasks);
+                    		job->deadline, job->bandwidth, job->num_tasks, job->t_dead);
             //send RECEIVE_ACK
             send_received_notification(job_id, lp);
         }
