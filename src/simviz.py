@@ -68,12 +68,13 @@ def parse_event_log(filename):
 def calc_utility(job_stats):
     for jobid in job_stats.keys():
         # if job_stats[jobid]["deadline"] == 0:
-            if (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]/20):
+            if (job_stats[jobid]["resp"] < job_stats[jobid]["idealtime"]):
                 y1 = 100
-            elif (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]/2):
-                y1 = 80 + (10*job_stats[jobid]["t_dead"] - 20*job_stats[jobid]["resp"])/(0.4*job_stats[jobid]["t_dead"])
             elif (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]):
-                y1 = 160* (job_stats[jobid]["t_dead"] - job_stats[jobid]["resp"])/job_stats[jobid]["t_dead"]
+                y1 = 100*(job_stats[jobid]["t_dead"] - job_stats[jobid]["resp"])/job_stats[jobid]["t_dead"]
+#                y1 = 80 + (10*job_stats[jobid]["t_dead"] - 20*job_stats[jobid]["resp"])/(0.4*job_stats[jobid]["t_dead"])
+#            elif (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]):
+#                y1 = 160* (job_stats[jobid]["t_dead"] - job_stats[jobid]["resp"])/job_stats[jobid]["t_dead"]
                 # utilityscore.append(y1)
             else:
                 # utilityscore.append(0)
@@ -191,7 +192,7 @@ def generate_csv(job_stats, table_name):
 
     outfile = open(table_name, "w")
 
-    outfile.write("jobid, dest_id, size, submit_time, start_time, end_time, deadline, bandwidth, wait, resp, run, ideal, slow, resp_slow, utility\n")
+    # outfile.write("jobid, dest_id, size, submit_time, start_time, end_time, deadline, bandwidth, wait, resp, run, ideal, slow, resp_slow, utility\n")
     
     for jobid in job_stats.keys():    
         dest_id = job_stats[jobid]["dest_id"] 

@@ -167,7 +167,7 @@ void handle_kick_off_event(
 /* data downloaded */
 void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp) {
 
-	if(sched_policy !=1 && strlen(m->object_id)>0){
+	if(sched_policy < 2 && strlen(m->object_id)>0){
         char *job_id = m->object_id;
         Job* job = g_hash_table_lookup(job_map, job_id);
         assert(job);
@@ -182,7 +182,7 @@ void handle_data_download_event(dest_host_state * ns, tw_bf * b, datsim_msg * m,
         //send RECEIVE_ACK
         send_received_notification(job_id, lp);
 	}
-    if (sched_policy == 1 && strlen(m->object_id)>0) {
+    if (sched_policy >= 2 && strlen(m->object_id)>0) {
         char* taskid = m->object_id;
         Task* task = g_hash_table_lookup(task_map, taskid);
         assert(task);

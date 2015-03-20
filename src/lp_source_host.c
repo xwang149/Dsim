@@ -303,8 +303,8 @@ static void handle_schedule_req_event(
 	for (int i=0; i<3; i++){
 		Job* job;
 		GQueue* job_queue = map_to_queue(job,i);
-		if (sched_policy !=1){
-			if (sched_policy == 2){
+		if (sched_policy < 2){
+			if (sched_policy == 1){
 				//reorder job queue by weighted queuing time
 				handle_priority_queue(lp, job_queue);
 			}
@@ -330,9 +330,10 @@ static void handle_schedule_req_event(
 		    	}
 		    }
 		}
-		if (sched_policy == 1 ){
+		if (sched_policy >= 2 ){
 			//utility based handling
-//			handle_priority_queue(lp, job_queue);
+			if (sched_policy == 3)
+				handle_priority_queue(lp, job_queue);
 			if (!g_queue_is_empty(job_queue)){
 		    	char job_id[MAX_LENGTH_ID];
 		    	strcpy(job_id, g_queue_peek_head(job_queue));
@@ -367,7 +368,7 @@ void handle_job_ready_event(
     datsim_msg * m,
     tw_lp * lp)
 {
-    if (sched_policy != 1) {
+    if (sched_policy < 2) {
         char* job_id = m->object_id;
         Job* job = g_hash_table_lookup(job_map, job_id);
         assert(job);
@@ -390,7 +391,7 @@ void handle_job_ready_event(
     	model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     }
     //transfer tasks in the task queue
-    else if (sched_policy == 1 ){
+    else if (sched_policy >= 2 ){
 	    //send tasks in task queue
 		while (!g_queue_is_empty(task_queue)){
 	    	char task_id[MAX_LENGTH_ID];
@@ -627,18 +628,18 @@ static void init_conn(int conn[], int conn_slots){
 }
 
 static double calc_job_utility(double deadtime, double resp){
-//    if (resp < deadtime)
-//    	return (double) 100*(deadtime - resp)/deadtime;
-//    else
-//    	return 0;
-    if (resp <= deadtime / 20.0)
-    	return 100;
-    else if (resp <= deadtime / 2.0)
-    	return (double) 80 + (10*deadtime - 20*resp) / (0.4*deadtime);
-    else if (resp <= deadtime)
-    	return (double) 160*(deadtime - resp) / deadtime;
+    if (resp < deadtime)
+    	return (double) 100*(deadtime - resp)/deadtime;
     else
     	return 0;
+//    if (resp <= deadtime / 20.0)
+//    	return 100;
+//    else if (resp <= deadtime / 2.0)
+//    	return (double) 80 + (10*deadtime - 20*resp) / (0.4*deadtime);
+//    else if (resp <= deadtime)
+//    	return (double) 160*(deadtime - resp) / deadtime;
+//    else
+//    	return 0;
 }
 
 static void calc_utility_matrix(double U[][MAX_CONN+1], GQueue *job_queue, int conn_slots, int max_slot, double now){
