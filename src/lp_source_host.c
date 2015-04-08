@@ -16,7 +16,7 @@
 GHashTable *job_map=NULL;
 GHashTable *task_map=NULL;
 GHashTable *limit_map=NULL;
-static GQueue* job_queue;
+static GQueue* dest1_queue, dest2_queue, dest3_queue;
 //static GQueue* priority_queue[MAX_PRIORITY];
 static GQueue* task_queue;
 
@@ -54,10 +54,12 @@ static void handle_job_done_event(source_host_state * ns, tw_bf * b, datsim_msg 
 
 /* supportive functions */
 static void handle_priority_queue(tw_lp * lp);
+static void handle_utility_queue(tw_lp * lp);
 static gint compare_function(gconstpointer a, gconstpointer b, gpointer data);
 static void calc_priority(tw_lp * lp, Job *job);
 static void handle_task_queue(Job* job);
 static tw_lpid plan_dest(Job* job);
+static GQueue* map_to_queue(Job* job,int i);
 //static void display_queue(GQueue *queue);
 
 /* set up the function pointers for ROSS, as well as the size of the LP state
@@ -131,7 +133,9 @@ void lpf_source_host_init(
     tw_stime kickoff_time;
 
     memset(ns, 0, sizeof(*ns));
-    job_queue = g_queue_new();
+    dest1_queue = g_queue_new();
+    dest2_queue = g_queue_new();
+    dest3_queue = g_queue_new();
     task_queue = g_queue_new();
 
     /* skew each kickoff event slightly to help avoid event ties later on */
@@ -263,8 +267,8 @@ void handle_job_submit_event(
     assert(job);
     fprintf(event_log, "%lf;source_host;%lu;JQ;jobid=%s\n",
     		now_sec(lp), lp->gid, job_id);
-    //check job priority and put job in proper queue, then request for scheduler
-    g_queue_push_tail(job_queue, job->id);
+    //put job in proper queue, then request for scheduler
+    g_queue_push_tail(map_to_queue(job,-1), job->id);
     tw_event *e;
     datsim_msg *msg;
     e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
@@ -286,33 +290,41 @@ static void handle_schedule_req_event(
 				now_sec(lp), lp->gid, m->object_id);
 	}
 
-	if (sched_policy != 0 ){
-		//reorder job queue by priority
-		handle_priority_queue(lp);
+	if (sched_policy !=1){
+		if (sched_policy == 2){
+			//reorder job queue by weighted queuing time
+			handle_priority_queue(lp);
+		}
+		for(int i=0; i<3;i++){
+			Job* job;
+			GQueue* job_queue = map_to_queue(job,i);
+		    //schedule policy
+		    if (!g_queue_is_empty(job_queue)){
+		    	char job_id[MAX_LENGTH_ID];
+		    	strcpy(job_id, g_queue_peek_head(job_queue));
+			    job = g_hash_table_lookup(job_map, job_id);
+			    assert(job);
+		    	//check trans_limit
+		    	if (ns->concur_jobs < ns->trans_limit){
+		    		//pop the first job from the queue
+		    	    g_queue_pop_head(job_queue);
+		    	    //pass ready job
+		    	    tw_event *e;
+		    	    datsim_msg *msg;
+		    	    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
+		    	    msg = tw_event_data(e);
+		    	    msg->event_type = JOB_READY;
+		    	    strcpy(msg->object_id, job->id);
+		    	    tw_event_send(e);
+		    	}
+		    }
+		}
 	}
 
-    //schedule policy
-    if (!g_queue_is_empty(job_queue)){
-    	char job_id[MAX_LENGTH_ID];
-    	strcpy(job_id, g_queue_peek_head(job_queue));
-	    Job* job = g_hash_table_lookup(job_map, job_id);
-	    assert(job);
-    	//check trans_limit
-        Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
-        assert(tl);
-    	if (tl->concur_jobs < tl->trans_limit && ns->concur_jobs < ns->trans_limit){
-    		//pop the first job from the queue
-    	    g_queue_pop_head(job_queue);
-    	    //pass ready job
-    	    tw_event *e;
-    	    datsim_msg *msg;
-    	    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
-    	    msg = tw_event_data(e);
-    	    msg->event_type = JOB_READY;
-    	    strcpy(msg->object_id, job->id);
-    	    tw_event_send(e);
-    	}
-    }
+	if (sched_policy == 1 ){
+		//reorder job queue by weighted queuing time
+		handle_utility_queue(lp);
+	}
     return;
 }
 
@@ -329,7 +341,10 @@ void handle_job_ready_event(
     fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
 
     //split job into sub tasks
-    handle_task_queue(job);
+	if (sched_policy == 1 ){
+		//utility based handling
+		handle_priority_queue(lp);
+	}
 
     printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu\n",
     		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize);
@@ -398,17 +413,20 @@ void handle_job_done_event(source_host_state * ns,
 
 static void handle_priority_queue(tw_lp * lp)
 {
-	if (!g_queue_is_empty(job_queue)){
-		//calculate priority for each job in the queue
-		for (guint i=0; i< g_queue_get_length(job_queue); i++){
-	    	char job_id[MAX_LENGTH_ID];
-	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
-		    Job* job = g_hash_table_lookup(job_map, job_id);
-		    assert(job);
-		    calc_priority(lp, job);
-		}
-		//sort the job according to its priority score
-		g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
+	for(int j=0; j<3;j++){
+		Job* job;
+		GQueue* job_queue = map_to_queue(job,j);
+		if (!g_queue_is_empty(job_queue)){
+			//calculate priority for each job in the queue
+			for (guint i=0; i< g_queue_get_length(job_queue); i++){
+		    	char job_id[MAX_LENGTH_ID];
+		    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
+			    Job* job = g_hash_table_lookup(job_map, job_id);
+			    assert(job);
+			    calc_priority(lp, job);
+			}
+			//sort the job according to its priority score
+			g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
 
 //		for (guint i=0; i< g_queue_get_length(job_queue); i++){
 //	    	char job_id[MAX_LENGTH_ID];
@@ -417,7 +435,12 @@ static void handle_priority_queue(tw_lp * lp)
 //		    assert(job);
 //		    printf("[%lf][source_host][%lu][queue]%lf\n",now_sec(lp), lp->gid, job->priority);
 //		}
+		}
 	}
+}
+
+static void handle_utility_queue(tw_lp * lp){
+
 }
 
 static gint compare_function(gconstpointer a, gconstpointer b, gpointer data)
@@ -507,6 +530,27 @@ static tw_lpid plan_dest(Job* job)
 {
 	char *endptr;
 	return strtoll(job->dest_host, &endptr, 10);
+}
+
+static GQueue* map_to_queue(Job* job, int i)
+{
+	if (i==-1){
+		if (strcmp(job->dest_host,"4")==0)
+			return dest1_queue;
+		else if (strcmp(job->dest_host,"6")==0)
+			return dest2_queue;
+		else
+			return dest3_queue;
+	}
+	else{
+		if (i==0)
+			return dest1_queue;
+		else if (i==1)
+			return dest2_queue;
+		else
+			return dest3_queue;
+	}
+
 }
 
 //static void display_queue(GQueue *queue)
