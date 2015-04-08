@@ -236,6 +236,7 @@ void handle_kick_off_event(
         	deadline =  us_to_ns(etime_to_stime(job->deadline));
         submit_time = create_time + ns_tw_lookahead;
         if (fraction > 0 && fraction < 1.0) {
+        	create_time = create_time * fraction;
         	submit_time = submit_time * fraction;
         	deadline = deadline * fraction;
         }
@@ -285,7 +286,7 @@ static void handle_schedule_req_event(
 				now_sec(lp), lp->gid, m->object_id);
 	}
 
-	if (sched_policy == 1){
+	if (sched_policy != 0 ){
 		//reorder job queue by priority
 		handle_priority_queue(lp);
 	}
@@ -438,16 +439,19 @@ static gint compare_function(gconstpointer a, gconstpointer b, gpointer data)
 static void calc_priority(tw_lp * lp, Job *job)
 {
 	int pri=0;
-	double wait_time = now_sec(lp) - job->stats.created;
-	double ideal_time = (double) job->inputsize / job->bandwidth + 5*ns_to_s(ns_tw_lookahead);
-	if (ideal_time < 0.5) ideal_time = 0.5;
-	double frac = 1 - (1/(wait_time / ideal_time + 1));;
+	double wait_time = (double) now_sec(lp) - job->stats.created;
+	double ideal_time = (double)5*ns_to_s(ns_tw_lookahead) + (double) job->inputsize / job->bandwidth;
+	double frac = 1 - (1/(wait_time / ideal_time + 1));
+
 	if (job->deadline == 0){
 		while (pri < MAX_PRIORITY && wait_time >= ideal_time) {
 			pri++;
 			wait_time = wait_time - ideal_time;
 		}
-		job->priority = pri + frac;
+		if (sched_policy == 1)
+			job->priority = pri + frac;
+		else if (sched_policy == 2)
+			job->priority = frac;
 	}
 	else {
 		double stall_time = job->deadline - PREDEADLINE * ideal_time;
@@ -455,8 +459,12 @@ static void calc_priority(tw_lp * lp, Job *job)
 			pri++;
 			wait_time = wait_time - ideal_time;
 		}
-		job->priority = pri + frac;
+		if (sched_policy == 1)
+			job->priority = pri + frac;
+		else if (sched_policy == 2)
+			job->priority = frac;
 	}
+
 	Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
 	assert(tl);
 	if (tl->concur_jobs < tl->trans_limit)
@@ -466,15 +474,14 @@ static void calc_priority(tw_lp * lp, Job *job)
 
 static void handle_task_queue(Job* job)
 {
-	printf("priority is %f\n", job->priority);
 	int threadNum;
-	if (job->inputsize >= 1048576 ) {
+	if (job->inputsize >= 1048576) {
 		threadNum  =  (long) (job->priority/2)+1;
 		if (threadNum > 8)	threadNum = 8;
 	} else {
 		threadNum = 1;
 	}
-	printf("thread# is %d\n", threadNum);
+//	printf("thread# is %d\n", threadNum);
 	uint64_t size = job->inputsize;
 	uint64_t chunk = job->inputsize / threadNum;
 	for (int i=0; i < threadNum; i++){

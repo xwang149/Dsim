@@ -36,7 +36,7 @@ const tw_optdef app_opt [] =
     TWOPT_CHAR("codes-config", conf_file_name, "name of codes configuration file"),
     TWOPT_CHAR("jobtrace", jobtrace_file_name, "job trace"),
     TWOPT_CHAR("output", output_file_name, "output file name"),
-    TWOPT_UINT("sched-policy", sched_policy_arg, "scheduling policy, 0 for non-priority, 1 for priority"),
+    TWOPT_UINT("sched-policy", sched_policy_arg, "scheduling policy, 0 for FIFO, 1 for Utility, 2 for wait_t priority"),
     TWOPT_UINT("fraction", fraction_arg, "fraction of job arrival intervals (1-99, meaning 1%-99%)"),
     TWOPT_CHAR("trans-limit", trans_limit_filename, "file name for transfer limitation"),
     {TWOPT_END()}
@@ -89,7 +89,7 @@ int main(
         return 1;
     }
     if (sched_policy_arg != 0) {
-    	sched_policy = 1;
+    	sched_policy = sched_policy_arg;
     }
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -116,9 +116,9 @@ int main(
     /* in this example, we are using simplenet, which simulates point to point
      * communication between any two entities (other networks are trickier to
      * setup). Hence: */
-    if(net_id != SIMPLEWAN)
+    if(net_id != SIMPLEP2P)
     {
-    	printf("\n The test works with simple-wan configuration only! ");
+    	printf("\n The test works with simple-p2p configuration only! ");
         MPI_Finalize();
         return 0;
     }
