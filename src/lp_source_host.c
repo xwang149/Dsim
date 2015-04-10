@@ -340,14 +340,14 @@ void handle_job_ready_event(
     assert(job);
     fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
 
-    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu\n",
-    		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize);
+    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu;queuelength=%d\n",
+    		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize,g_queue_get_length(map_to_queue(job,-1)));
     Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
     assert(tl);
     tl->concur_jobs += 1;
     ns->concur_jobs += 1;
     fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d;priority=%f\n",
-    		now_sec(lp), lp->gid, m->object_id, tl->host_id,tl->concur_jobs, job->priority);
+    		now_sec(lp), lp->gid, m->object_id, tl->host_id,ns->concur_jobs, job->priority);
 
     if (sched_policy != 1) {
     	//send a job
@@ -415,7 +415,7 @@ void handle_job_done_event(source_host_state * ns,
     assert(tl);
     tl->concur_jobs -= 1;
     fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;concurency=%d\n",
-    		now_sec(lp), lp->gid, job_id,tl->host_id, tl->concur_jobs);
+    		now_sec(lp), lp->gid, job_id,tl->host_id, ns->concur_jobs);
     //request the next job
     tw_event *e;
     datsim_msg *msg;
@@ -478,8 +478,8 @@ static void calc_priority(tw_lp * lp, Job *job)
 {
 	int pri=0;
 	double wait_time = (double) now_sec(lp) - job->stats.created;
-	double mbytes = (double) job->inputsize / 1024/1024;
-	job->priority = wait_time/mbytes;
+	double mbytes = (double) job->inputsize /1024/1024;
+	job->priority = 1000000*wait_time/mbytes;
 }
 
 

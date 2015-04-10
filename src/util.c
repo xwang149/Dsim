@@ -104,7 +104,7 @@ GHashTable* parse_jobtrace(char* jobtrace_path) {
     }
     
     printf("[source_host]parsing job trace ... done: %u jobs parsed\n", g_hash_table_size(job_map));
-
+    fclose(f);
     return job_map;
 }
 
@@ -168,6 +168,7 @@ static void parse_dest_bandwidth(Job *job, char *bandwidth_filename){
         	job->bandwidth = atoi(parts[1])*1024*1024;
         memset(line, 0, sizeof(line));
     }
+    fclose(f);
 }
 
 
@@ -194,6 +195,7 @@ GHashTable* parse_trans_limit(char* trans_limit_filename) {
         memset(line, 0, sizeof(line));
         g_hash_table_insert(limit_map, tl->host_id, tl);
     }
+    fclose(f);
     return limit_map;
 }
 

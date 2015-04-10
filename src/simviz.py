@@ -28,12 +28,12 @@ def parse_event_log(filename):
         line = line.strip('\r')
         if len(line)==0:
             continue
-        parts = line.split(";");
+        parts = line.split(";")
         if parts[1] == "dest_host" and parts[3] == "TD":
             dest_host_id = parts[2]
             vals = {}
             for i in range(4, 12):
-                p = parts[i].split("=");
+                p = parts[i].split("=")
                 vals[p[0]] = p[1]
             jobid = vals["jobid"]
             job_stats[jobid] = {}
@@ -46,7 +46,7 @@ def parse_event_log(filename):
             job_stats[jobid]["bandwidth"] = float(vals["bandwidth"])
             job_stats[jobid]["wait"] = job_stats[jobid]["start"] - job_stats[jobid]["submit"]
             job_stats[jobid]["resp"] = job_stats[jobid]["end"] - job_stats[jobid]["submit"]
-            job_stats[jobid]["idealtime"] = max(0.5, job_stats[jobid]["inputsize"] / job_stats[jobid]["bandwidth"] + 0.005)
+            job_stats[jobid]["idealtime"] = job_stats[jobid]["inputsize"] / job_stats[jobid]["bandwidth"] + 0.01
             job_stats[jobid]["slowdown"] = (job_stats[jobid]["end"] - job_stats[jobid]["start"]) / job_stats[jobid]["idealtime"]
             job_stats[jobid]["resp_slow"] = job_stats[jobid]["resp"] / job_stats[jobid]["idealtime"]
             event_type=parts[3]
@@ -63,7 +63,7 @@ def parse_event_log(filename):
 
 def calc_utility(job_stats):
     for jobid in job_stats.keys():
-        if job_stats[jobid]["deadline"] == 0:
+        # if job_stats[jobid]["deadline"] == 0:
             deadtime = max(5, max_uscore*job_stats[jobid]["idealtime"])
             if (job_stats[jobid]["resp"] < deadtime):
                 y1 = 100*(deadtime - job_stats[jobid]["resp"])/deadtime
@@ -72,18 +72,18 @@ def calc_utility(job_stats):
             else:
                 # utilityscore.append(0)
                 job_stats[jobid]["utilityscore"] = 0
-        else:
-            deadtime = max(5, (max_uscore - pre_deadline)*job_stats[jobid]["idealtime"]+job_stats[jobid]["deadline"]-job_stats[jobid]["submit"])
-            if(job_stats[jobid]["resp"] <= job_stats[jobid]["deadline"]-job_stats[jobid]["submit"]):
-                # utilityscore.append(100.0)
-                job_stats[jobid]["utilityscore"] = 100
-            elif (job_stats[jobid]["resp"] < deadtime):
-                y2 = 100*(deadtime - job_stats[jobid]["resp"])/(deadtime-job_stats[jobid]["deadline"]+job_stats[jobid]["submit"])
-                # utilityscore.append(y2)
-                job_stats[jobid]["utilityscore"] = y2
-            else:
-                # utilityscore.append(0)
-                job_stats[jobid]["utilityscore"] = 0
+        # else:
+        #     deadtime = max(5, (max_uscore - pre_deadline)*job_stats[jobid]["idealtime"]+job_stats[jobid]["deadline"]-job_stats[jobid]["submit"])
+        #     if(job_stats[jobid]["resp"] <= job_stats[jobid]["deadline"]-job_stats[jobid]["submit"]):
+        #         # utilityscore.append(100.0)
+        #         job_stats[jobid]["utilityscore"] = 100
+        #     elif (job_stats[jobid]["resp"] < deadtime):
+        #         y2 = 100*(deadtime - job_stats[jobid]["resp"])/(deadtime-job_stats[jobid]["deadline"]+job_stats[jobid]["submit"])
+        #         # utilityscore.append(y2)
+        #         job_stats[jobid]["utilityscore"] = y2
+        #     else:
+        #         # utilityscore.append(0)
+        #         job_stats[jobid]["utilityscore"] = 0
     return job_stats
 
 def calc_job_stats(job_stats):
@@ -92,6 +92,7 @@ def calc_job_stats(job_stats):
     job_metrics["wait_t"] = []
     job_metrics["resp"] = []
     job_metrics["slowdown"] = []
+    job_metrics["resp_slow"] = []
     job_metrics["total_data"] = 0
     job_metrics["inputsize"] = []
     job_metrics["utility"] = []
@@ -103,6 +104,7 @@ def calc_job_stats(job_stats):
         job_metrics["wait_t"].append(stats["wait"])
         job_metrics["resp"].append(stats["resp"])
         job_metrics["slowdown"].append(stats["slowdown"])
+        job_metrics["resp_slow"].append(stats["resp_slow"])
         job_metrics["inputsize"].append(stats["inputsize"])
         job_metrics["utility"].append(stats["utilityscore"])
     return job_metrics
@@ -111,10 +113,13 @@ def show_job_metrics(job_metrics):
     avg_wait = sum(job_metrics["wait_t"]) / len(job_metrics["wait_t"])
     avg_resp = sum(job_metrics["resp"]) / len(job_metrics["resp"])
     avg_slow = sum(job_metrics["slowdown"]) / len(job_metrics["slowdown"])
-    # avg_utility = sum(job_metrics["utility"]) / len(job_metrics["utility"])
+    avg_cont = sum(job_metrics["resp_slow"]) / len(job_metrics["resp_slow"])
     agg_utility = np.dot(job_metrics["utility"], job_metrics["resp"])
+    acc_utility = sum(job_metrics["utility"])
     sys_throughput = job_metrics["total_data"] / job_metrics["makespan"] / 1048576
-    print "[source_host]average waiting time (sec) = %f average response time (sec)=%f, avg slowdown =%f, agg utility =%f, sys througput (MB/sec)=%f\n" % (avg_wait, avg_resp, avg_slow, agg_utility, sys_throughput)
+    print "[source_host]\n"
+    print "       avg_wait(sec)       avg_resp(sec)            avg_slow            avg_cont            acc_util            agg_util\n"
+    print "%20f%20f%20f%20f%20f%20f\n" % (avg_wait, avg_resp, avg_slow, avg_cont, acc_utility, agg_utility)
 
 def calc_dest_metrics(job_stats):
     dest_metrics= {}
@@ -127,6 +132,7 @@ def calc_dest_metrics(job_stats):
             dest_metrics[dest_id]["resp"] = []
             dest_metrics[dest_id]["runtime"] = []
             dest_metrics[dest_id]["slowdown"] = []
+            dest_metrics[dest_id]["resp_slow"] = []
             dest_metrics[dest_id]["total_data"] = 0
             dest_metrics[dest_id]["inputsize"] = []
             dest_metrics[dest_id]["bandwidth"] = 0
@@ -138,25 +144,34 @@ def calc_dest_metrics(job_stats):
         dest_metrics[dest_id]["resp"].append(stats["resp"])
         dest_metrics[dest_id]["runtime"].append(stats["resp"] - stats["wait"])
         dest_metrics[dest_id]["slowdown"].append(stats["slowdown"])
+        dest_metrics[dest_id]["resp_slow"].append(stats["resp_slow"])
         dest_metrics[dest_id]["inputsize"].append(stats["inputsize"])
         dest_metrics[dest_id]["bandwidth"] = stats["bandwidth"]
         dest_metrics[dest_id]["utilityscore"].append(stats["utilityscore"])
     return dest_metrics
 
 def show_dest_metrics(dest_metrics):
-    for key, stats in dest_metrics.iteritems():
-        avg_wait = sum(stats["wait_t"]) / len(stats["wait_t"])
-        avg_resp = sum(stats["resp"]) / len(stats["resp"])
-        avg_slow = sum(stats["slowdown"]) / len(stats["slowdown"])
-        band = stats["bandwidth"] / 1048576
-        # avg_utility = sum(stats["utilityscore"]) / len(stats["utilityscore"])
-        agg_utility = np.dot(stats["utilityscore"], stats["resp"])
-        dest_throughput = stats["total_data"] / stats["makespan"] / 1048576
-        print "[dest_host][%s]average waiting time (sec) = %f average response time (sec)= %f, avg slowdown = %f, bandwidth (MB/sec)= %f, agg_utility =%f, sys througput (MB/sec)= %f\n" % (key, avg_wait, avg_resp, avg_slow, band, agg_utility, dest_throughput)
+    sorted_keys = dest_metrics.keys()
+    sorted_keys.sort()
+    for key in sorted_keys:
+        avg_wait = sum(dest_metrics[key]["wait_t"]) / len(dest_metrics[key]["wait_t"])
+        avg_resp = sum(dest_metrics[key]["resp"]) / len(dest_metrics[key]["resp"])
+        avg_slow = sum(dest_metrics[key]["slowdown"]) / len(dest_metrics[key]["slowdown"])
+        avg_cont = sum(dest_metrics[key]["resp_slow"]) / len(dest_metrics[key]["resp_slow"])
+        band = dest_metrics[key]["bandwidth"] / 1048576
+        # avg_utility = sum(dest_metrics[key]["utilityscore"]) / len(dest_metrics[key]["utilityscore"])
+        agg_utility = np.dot(dest_metrics[key]["utilityscore"], dest_metrics[key]["resp"])
+        acc_utility = sum(dest_metrics[key]["utilityscore"])
+        dest_throughput = dest_metrics[key]["total_data"] / dest_metrics[key]["makespan"] / 1048576
+        print "[dest_host][%s]\n" % (key)
+        print "       avg_wait(sec)       avg_resp(sec)            avg_slow            avg_cont            acc_util            agg_util           bandwidth\n"
+        print "%20f%20f%20f%20f%20f%20f%20f\n" % (avg_wait, avg_resp, avg_slow, avg_cont, acc_utility, agg_utility,  band)
 
 def generate_csv(job_stats, table_name):
 
     outfile = open(table_name, "w")
+
+    outfile.write("jobid, dest_id, size, submit_time, start_time, end_time, deadline, bandwidth, wait, resp, run, ideal, slow, resp_slow, utility\n")
     
     for jobid in job_stats.keys():    
         dest_id = job_stats[jobid]["dest_id"] 
