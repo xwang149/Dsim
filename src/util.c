@@ -8,10 +8,11 @@
 int net_id = 0;
 FILE *event_log = NULL;
 
-
 float fraction = 1.0;
 int trans_limit = 0;
 int sched_policy = 0;
+int MAX_CONN = 0;
+int WINDOW = 0;
 
 static Job* parse_job_by_trace(gchar *line);
 static void parse_dest_bandwidth(Job *job, char *bandwidth_filename);
@@ -146,6 +147,10 @@ Job* parse_job_by_trace(gchar* line) {
     }
     parse_dest_bandwidth(jb, "bw-3sites.conf");
     strcpy(jb->state, "raw");
+    double ideal = (double) jb->inputsize / (jb->bandwidth/MAX_CONN) + 0.01;
+    jb->t_dead = 10 * ideal;
+    if (jb->t_dead < 300)
+    	jb->t_dead = 300;
     //print_job(jb);
     return jb;
 }
@@ -158,11 +163,13 @@ static void parse_dest_bandwidth(Job *job, char *bandwidth_filename){
     	perror(bandwidth_filename);
     	exit(1);
     }
+    uint64_t total_band;
     char dest[MAX_LENGTH_ID];
     while ( fgets ( line, sizeof(line), f ) != NULL ){ /* read a line */
     	gchar ** parts = NULL;
     	g_strstrip((gchar*)line);
     	parts = g_strsplit((gchar*)line,"=", 5);
+    	total_band += atoi(parts[1])*1024*1024;
         strcpy(dest, parts[0]);
         if (strcmp(job->dest_host, dest) == 0)
         	job->bandwidth = atoi(parts[1])*1024*1024;
@@ -194,6 +201,11 @@ GHashTable* parse_trans_limit(char* trans_limit_filename) {
         tl->trans_limit = atoi(parts[1]);
         memset(line, 0, sizeof(line));
         g_hash_table_insert(limit_map, tl->host_id, tl);
+
+        if (strcmp(parts[0],"0")==0){
+        	MAX_CONN = atoi(parts[1]);
+        	WINDOW = MAX_CONN / 2;
+        }
     }
     fclose(f);
     return limit_map;

@@ -53,14 +53,23 @@ static void handle_job_ready_event(source_host_state * ns, tw_bf * b, datsim_msg
 static void handle_job_done_event(source_host_state * ns, tw_bf * b, datsim_msg * m, tw_lp * lp);
 
 /* supportive functions */
-static void handle_priority_queue(tw_lp * lp);
-static void handle_utility_queue(tw_lp * lp);
+static void handle_priority_queue(tw_lp * lp, GQueue* job_queue);
 static gint compare_function(gconstpointer a, gconstpointer b, gpointer data);
 static void calc_priority(tw_lp * lp, Job *job);
-static void handle_task_queue(Job* job);
+
 static tw_lpid plan_dest(Job* job);
 static GQueue* map_to_queue(Job* job,int i);
 //static void display_queue(GQueue *queue);
+
+/* handle utility based scheduling*/
+static void handle_utility_queue(tw_lp * lp, GQueue* job_queue, int conn_slots, int max_slot);
+static void handle_task_queue(GQueue* job_queue, int conn[]);
+static void init_conn(int conn[], int conn_slots);
+static double calc_job_utility(double deadtime, double resp);
+static void calc_utility_matrix(double U[][MAX_CONN+1], GQueue *job_queue, int conn_slots, int max_slot, double now);
+static void calc_delta(double leftDelta[], double rightDelta[], int conn[], double U[][MAX_CONN+1], int conn_slots);
+static void find_solution(int sol[], double leftDelta[], double rightDelta[]);
+static void index_of(int func, int results[], double delta[]);
 
 /* set up the function pointers for ROSS, as well as the size of the LP state
  * structure (NOTE: ROSS is in charge of event and state (de-)allocation) */
@@ -101,9 +110,9 @@ static void reset_epoch_time() {
 
 void init_source_host() {
     /*parse workload file and init job_map*/
+    limit_map = parse_trans_limit(trans_limit_filename);
     job_map = parse_jobtrace(jobtrace_file_name);
     reset_epoch_time();
-    limit_map = parse_trans_limit(trans_limit_filename);
     task_map = init_tasktable();
     printf("[source_host]checking jobs...done");
     //display_hash_table(job_map, "job_map");
@@ -288,16 +297,17 @@ static void handle_schedule_req_event(
 	if (strcmp(m->object_id, "NAN") != 0) {
 		fprintf(event_log, "%lf;source_host;%lu;WQ;jobid=%s\n",
 				now_sec(lp), lp->gid, m->object_id);
+		printf("[%lf][source_host][%lu][inqueue]jobid=%s\n",now_sec(lp), lp->gid, m->object_id);
 	}
-
-	if (sched_policy !=1){
-		if (sched_policy == 2){
-			//reorder job queue by weighted queuing time
-			handle_priority_queue(lp);
-		}
-		for(int i=0; i<3;i++){
-			Job* job;
-			GQueue* job_queue = map_to_queue(job,i);
+	//for each queue
+	for (int i=0; i<3; i++){
+		Job* job;
+		GQueue* job_queue = map_to_queue(job,i);
+		if (sched_policy !=1){
+			if (sched_policy == 2){
+				//reorder job queue by weighted queuing time
+				handle_priority_queue(lp, job_queue);
+			}
 		    //schedule policy
 		    if (!g_queue_is_empty(job_queue)){
 		    	char job_id[MAX_LENGTH_ID];
@@ -308,6 +318,7 @@ static void handle_schedule_req_event(
 		    	if (ns->concur_jobs < ns->trans_limit){
 		    		//pop the first job from the queue
 		    	    g_queue_pop_head(job_queue);
+		    	    ns->concur_jobs += 1;
 		    	    //pass ready job
 		    	    tw_event *e;
 		    	    datsim_msg *msg;
@@ -319,11 +330,32 @@ static void handle_schedule_req_event(
 		    	}
 		    }
 		}
-	}
-
-	if (sched_policy == 1 ){
-		//utility based handling
-		handle_utility_queue(lp);
+		if (sched_policy == 1 ){
+			//utility based handling
+			handle_priority_queue(lp, job_queue);
+			if (!g_queue_is_empty(job_queue)){
+		    	char job_id[MAX_LENGTH_ID];
+		    	strcpy(job_id, g_queue_peek_head(job_queue));
+			    job = g_hash_table_lookup(job_map, job_id);
+			    assert(job);
+		    	//check trans_limit
+			    Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
+			    assert(tl);
+		    	if (tl->concur_jobs < tl->trans_limit){
+//		    		printf("has slots:%d - %d\n",tl->trans_limit, tl->concur_jobs);
+		    		int remain_slot = tl->trans_limit - tl->concur_jobs;
+					handle_utility_queue(lp, job_queue, remain_slot, tl->trans_limit);
+					//pass ready message
+		    	    tw_event *e;
+		    	    datsim_msg *msg;
+		    	    e = codes_event_new(lp->gid, ns_tw_lookahead, lp);
+		    	    msg = tw_event_data(e);
+		    	    msg->event_type = JOB_READY;
+		    	    strcpy(msg->object_id, "NAN");
+		    	    tw_event_send(e);
+		    	}
+			}
+		}
 	}
     return;
 }
@@ -335,21 +367,16 @@ void handle_job_ready_event(
     datsim_msg * m,
     tw_lp * lp)
 {
-    char* job_id = m->object_id;
-    Job* job = g_hash_table_lookup(job_map, job_id);
-    assert(job);
-    fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
-
-    printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu;queuelength=%d\n",
-    		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize,g_queue_get_length(map_to_queue(job,-1)));
-    Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
-    assert(tl);
-    tl->concur_jobs += 1;
-    ns->concur_jobs += 1;
-    fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;concurency=%d;priority=%f\n",
-    		now_sec(lp), lp->gid, m->object_id, tl->host_id,ns->concur_jobs, job->priority);
-
     if (sched_policy != 1) {
+        char* job_id = m->object_id;
+        Job* job = g_hash_table_lookup(job_map, job_id);
+        assert(job);
+        fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
+
+        printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu;queuelength=%d\n",
+        		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize,g_queue_get_length(map_to_queue(job,-1)));
+        fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;connection=%d;priority=%f\n",
+        		now_sec(lp), lp->gid, m->object_id, job->dest_host, job->num_tasks, job->priority);
     	//send a job
 	    datsim_msg m_remote;
 	    tw_lpid dest_id = get_source_router_lp_id();
@@ -359,26 +386,33 @@ void handle_job_ready_event(
         strcpy(m_remote.object_id, job->id);
         m_remote.size = job->inputsize;
         job->stats.start = now_sec(lp);
-    	 model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
+        job->num_tasks = 1;
+    	model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     }
-    //split job into sub tasks
+    //transfer tasks in the task queue
     else if (sched_policy == 1 ){
-		//utility based handling
-		handle_task_queue(lp);
-
-		job->stats.start = now_sec(lp);
 	    //send tasks in task queue
 		while (!g_queue_is_empty(task_queue)){
 	    	char task_id[MAX_LENGTH_ID];
 	    	strcpy(task_id, g_queue_pop_head(task_queue));
 		    Task* task = g_hash_table_lookup(task_map, task_id);
 		    assert(task);
+		    if (task->taskNum == 0) {
+		    	fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, task->job_id);
+		    	printf("[%lf][source_host][%lu][StartSending]dest_host=%s;taskid=%s;filesize=%lu\n",
+		    	        		now_sec(lp), lp->gid, task->dest_host, task->job_id, task->tasksize);
+		    }
 		    //prepare to send the task to destination
+		    Trans_Limit *tl = g_hash_table_lookup(limit_map, task->dest_host);
+		    assert(tl);
+		    tl->concur_jobs += 1;
+//		    printf("dest=%s;concur=%d\n",task->dest_host,tl->concur_jobs);
 		    datsim_msg m_remote;
 		    tw_lpid dest_id = get_source_router_lp_id();
 		    m_remote.event_type = SEND_REQ;
 		    m_remote.src = lp->gid;
-		    m_remote.next_hop = plan_dest(job);
+		    char *endptr;
+		    m_remote.next_hop = strtoll(task->dest_host, &endptr, 10);;
 	        strcpy(m_remote.object_id, task->task_id);
 	        m_remote.size = task->tasksize;
 	    	task->state = 1;
@@ -413,9 +447,10 @@ void handle_job_done_event(source_host_state * ns,
     ns->size_forward += job->inputsize;
     Trans_Limit *tl = g_hash_table_lookup(limit_map, job->dest_host);
     assert(tl);
-    tl->concur_jobs -= 1;
-    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;concurency=%d\n",
-    		now_sec(lp), lp->gid, job_id,tl->host_id, ns->concur_jobs);
+    tl->concur_jobs -= job->num_tasks;
+//    printf("dest=%s;concur=%d\n",job->dest_host,tl->concur_jobs);
+    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;connection=%d\n",
+    		now_sec(lp), lp->gid, job_id,tl->host_id, job->num_tasks);
     //request the next job
     tw_event *e;
     datsim_msg *msg;
@@ -426,22 +461,19 @@ void handle_job_done_event(source_host_state * ns,
     tw_event_send(e);
 }
 
-static void handle_priority_queue(tw_lp * lp)
+static void handle_priority_queue(tw_lp * lp, GQueue* job_queue)
 {
-	for(int j=0; j<3;j++){
-		Job* job;
-		GQueue* job_queue = map_to_queue(job,j);
-		if (!g_queue_is_empty(job_queue)){
-			//calculate priority for each job in the queue
-			for (guint i=0; i< g_queue_get_length(job_queue); i++){
-		    	char job_id[MAX_LENGTH_ID];
-		    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
-			    Job* job = g_hash_table_lookup(job_map, job_id);
-			    assert(job);
-			    calc_priority(lp, job);
-			}
-			//sort the job according to its priority score
-			g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
+	if (!g_queue_is_empty(job_queue)){
+		//calculate priority for each job in the queue
+		for (guint i=0; i< g_queue_get_length(job_queue); i++){
+		    char job_id[MAX_LENGTH_ID];
+		    strcpy(job_id, g_queue_peek_nth(job_queue, i));
+			Job* job = g_hash_table_lookup(job_map, job_id);
+			assert(job);
+			calc_priority(lp, job);
+		}
+		//sort the job according to its priority score
+		g_queue_sort(job_queue, (GCompareDataFunc)compare_function, NULL);
 
 //		for (guint i=0; i< g_queue_get_length(job_queue); i++){
 //	    	char job_id[MAX_LENGTH_ID];
@@ -450,12 +482,66 @@ static void handle_priority_queue(tw_lp * lp)
 //		    assert(job);
 //		    printf("[%lf][source_host][%lu][queue]%lf\n",now_sec(lp), lp->gid, job->priority);
 //		}
-		}
 	}
 }
 
-static void handle_utility_queue(tw_lp * lp){
+static void handle_utility_queue(tw_lp * lp, GQueue* job_queue, int conn_slots, int max_slot){
 
+	MAX_CONN = conn_slots;
+	int tempw = WINDOW;
+
+	int queue_len = g_queue_get_length (job_queue);
+	if (queue_len < WINDOW)
+		WINDOW = queue_len;
+
+//	printf("W=%d;Conn=%d\n", WINDOW, MAX_CONN);
+
+	int conn[WINDOW];
+    double U[WINDOW][MAX_CONN+1], leftDelta[WINDOW], rightDelta[WINDOW];
+    memset(U, 0, sizeof(U));
+    memset(conn, 0, sizeof(conn));
+    memset(leftDelta, 0, sizeof(leftDelta));
+    memset(rightDelta, 0, sizeof(rightDelta));
+
+    int DONE = 0;
+
+    //initial connection assignment
+    init_conn(conn, conn_slots);
+    //calculate utility matrix
+	double now = (double) now_sec(lp);
+    calc_utility_matrix(U, job_queue, conn_slots, max_slot, now);
+//    printf("Done calc utility\n");
+
+//    for(int i=0;i<WINDOW;i++){
+//    	for(int j=0;j<MAX_CONN+1; j++){
+//    		printf("%12.4f",U[i][j]);
+//    	}
+//    	printf("\n");
+//    }
+
+    while (!DONE) {
+    	calc_delta(leftDelta, rightDelta, conn, U, conn_slots);
+//    	printf("left=%12f;right=%12f\n", leftDelta[0], rightDelta[0]);
+    	int sol[2];
+    	//find a solution that can increase utility
+    	find_solution(sol, leftDelta, rightDelta);
+    	if (sol[0]==-1 || sol[1]==-1){
+    		//if cannot find a solution, stop
+    		DONE = 1;
+    	}
+    	else {
+    		//if finds a solution, update connection assignment
+    		conn[sol[0]] += 1;
+    		conn[sol[1]] -= 1;
+    	}
+    }
+//    for(int i=0;i<WINDOW;i++){
+//    	printf("%12d",conn[i]);
+//    }
+//    printf("\n");
+
+    handle_task_queue(job_queue, conn);
+    WINDOW = tempw;
 }
 
 static gint compare_function(gconstpointer a, gconstpointer b, gpointer data)
@@ -483,36 +569,207 @@ static void calc_priority(tw_lp * lp, Job *job)
 }
 
 
-static void handle_task_queue(Job* job)
+static void handle_task_queue(GQueue* job_queue, int conn[])
 {
-	int threadNum;
-	if (job->inputsize >= 1048576) {
-		threadNum  =  (long) (job->priority/2)+1;
-		if (threadNum > 8)	threadNum = 8;
-	} else {
-		threadNum = 1;
+	int connNum;
+	Job *job;
+	for (int i=0; i < WINDOW; i++) {
+		connNum = conn[i];
+		if (connNum != 0) {
+			//pop the job from queue
+	    	char job_id[MAX_LENGTH_ID];
+	    	strcpy(job_id, g_queue_peek_nth(job_queue, i));
+		    job = g_hash_table_lookup(job_map, job_id);
+		    assert(job);
+		    //partition the job as [connNum] of tasks
+			uint64_t size = job->inputsize;
+			uint64_t chunk = job->inputsize / connNum;
+			for (int j=0; j < connNum; j++){
+				Task *task = NULL;
+				task = malloc(sizeof(Task));
+				memset(task, 0, sizeof(Task));
+				task->tasksize = size - (connNum-j-1)*chunk;
+				size = size - task->tasksize;
+				strcpy(task->job_id, job->id);
+				strcpy(task->dest_host, job->dest_host);
+				sprintf(task->task_id, "%s_%d", job->id, j);
+				task->state = 0;
+				task->taskNum = j;
+				job->task_states[j] = 0;
+				g_hash_table_insert(task_map, task->task_id, task);
+				g_queue_push_tail(task_queue, task->task_id);
+			}
+			//display_queue(task_queue, ">>>");
+			job->num_tasks = connNum;
+			job->remain_tasks = connNum;
+		}
 	}
-//	printf("thread# is %d\n", threadNum);
-	uint64_t size = job->inputsize;
-	uint64_t chunk = job->inputsize / threadNum;
-	for (int i=0; i < threadNum; i++){
-		Task *task = NULL;
-		task = malloc(sizeof(Task));
-		memset(task, 0, sizeof(Task));
-		task->tasksize = size - (threadNum-i-1)*chunk;
-		size = size - task->tasksize;
-		strcpy(task->job_id, job->id);
-		sprintf(task->task_id, "%s_%d", job->id, i);
-		task->state = 0;
-		task->taskNum = i;
-		job->task_states[i] = 0;
-		g_hash_table_insert(task_map, task->task_id, task);
-		g_queue_push_tail(task_queue, task->task_id);
+	//pop jobs from queue
+	for (int i=WINDOW-1; i >= 0; i--){
+		if (conn[i] != 0)
+			g_queue_pop_nth(job_queue, i);
+//	    Trans_Limit *tl = g_hash_table_lookup(limit_map, "0");
+//	    assert(tl);
+//	    tl->concur_jobs --;
 	}
-	//display_queue(task_queue, ">>>");
-	job->num_tasks = threadNum;
-	job->remain_tasks = threadNum;
 }
+
+static void init_conn(int conn[], int conn_slots){
+	//evenly spread C_max connections to jobs in Window
+	int base = conn_slots / WINDOW;
+	int addition = conn_slots % WINDOW;
+	for (int i = 0; i < WINDOW; i++) {
+		if (i < addition)
+			conn[i] = base+1;
+		else
+			conn[i] = base;
+	}
+}
+
+static double calc_job_utility(double deadtime, double resp){
+//    if (resp < deadtime)
+//    	return (double) 100*(deadtime - resp)/deadtime;
+//    else
+//    	return 0;
+    if (resp <= deadtime / 10.0)
+    	return 100;
+    else if (resp <= deadtime / 2.0)
+    	return (double) 80 + (10*deadtime - 20*resp) / (0.4*deadtime);
+    else if (resp <= deadtime)
+    	return (double) 160*(deadtime - resp) / deadtime;
+    else
+    	return 0;
+}
+
+static void calc_utility_matrix(double U[][MAX_CONN+1], GQueue *job_queue, int conn_slots, int max_slot, double now){
+
+	double t_est, t_wait, resp;
+	double deadtime[WINDOW], temp[WINDOW];
+	int min_index[2];
+
+	for(int i = 0; i<WINDOW; i++){
+		char job_id[MAX_LENGTH_ID];
+		strcpy(job_id, g_queue_peek_nth(job_queue, i));
+	    Job *job = g_hash_table_lookup(job_map, job_id);
+	    assert(job);
+		deadtime[i] = job->t_dead;
+		for (int c=1; c<=conn_slots;c++){
+			t_est = (double) job->inputsize/(c*job->bandwidth/max_slot);
+			t_wait = (double) now - job->stats.created;
+			resp = (double) t_wait + t_est;
+			U[i][c] = calc_job_utility(deadtime[i], resp);
+		}
+		temp[i] = resp;
+	}
+	if (WINDOW > 1) {
+		index_of(0, min_index, temp);
+		for(int i = 0; i<WINDOW; i++){
+			if (i != min_index[0])
+				U[i][0] = calc_job_utility(deadtime[i], temp[i]+temp[min_index[0]]);
+			else
+				U[i][0] = calc_job_utility(deadtime[i], temp[i]+temp[min_index[1]]);
+		}
+	}
+}
+
+static void calc_delta(double leftDelta[], double rightDelta[], int conn[], double U[][MAX_CONN+1], int conn_slots){
+	for(int i=0; i<WINDOW; i++){
+		if (conn[i] == 0)
+			leftDelta[i] = MAX_NUM;
+		else
+			leftDelta[i] =U[i][conn[i]] -  U[i][conn[i]-1];
+
+		if (conn[i] == conn_slots)
+			rightDelta[i] = 0 - MAX_NUM;
+		else
+			rightDelta[i] = U[i][conn[i]+1] - U[i][conn[i]];
+
+//		printf("%12.4e,%12.4e\n", leftDelta[i], rightDelta[i]);
+	}
+//	printf("\n");
+}
+
+static void find_solution(int sol[], double leftDelta[], double rightDelta[]){
+	int max_results[2], min_results[2];
+	int hasSol = 0;
+	//find max and second max index of rightDelta
+	index_of(1, max_results, rightDelta);
+	//find min and second min index of leftDelta
+	index_of(0, min_results, leftDelta);
+//	printf("max=%12d;secmax=%12d;min=%12d;secmin=%12d\n",max_results[0],max_results[1],min_results[0],min_results[1]);;
+	//find a solution that increment utility
+	if (max_results[0] != min_results[0]) {
+		double increment = rightDelta[max_results[0]]-leftDelta[min_results[0]];
+		if (increment > 0){
+			sol[0] = max_results[0];
+			sol[1] = min_results[0];
+			hasSol = 1;
+		}
+	}
+	else {
+		double i1= rightDelta[max_results[0]]-leftDelta[min_results[1]];
+		double i2= rightDelta[max_results[1]]-leftDelta[min_results[0]];
+		if (i1 >= i2 && i1 > 0){
+			if (i1 > 0){
+				sol[0] = max_results[0];
+				sol[1] = min_results[1];
+				hasSol = 1;
+			}
+		}
+		else if (i2>i1 && i2 > 0){
+				sol[0] = max_results[1];
+				sol[1] = min_results[0];
+				hasSol = 1;
+		}
+	}
+
+	if (hasSol != 1){
+		sol[0] = -1;
+		sol[1] = -1;
+	}
+}
+
+static void index_of(int func, int results[], double delta[]) {
+	int first,second;
+	if (WINDOW==1){
+		first=0; second = 0;
+	}
+	else {
+		if (func == 1) { //find max of rightDelta
+			if (delta[0] < delta[1]) {
+			    second = 0; first = 1;
+			} else {
+			    second = 1; first = 0;
+			}
+			for(int i = 2; i < WINDOW; i++){
+				if (delta[first] < delta[i]){
+					second = first;
+					first = i;
+				}
+				else if (delta[second] < delta[i])
+					second = i;
+			}
+		}
+		if (func == 0) { //find min of leftDelta
+			if (delta[0] > delta[1]) {
+			    second = 0; first = 1;
+			} else {
+			    second = 1; first = 0;
+			}
+			for( int i=2; i<WINDOW;i++){
+				if (delta[first] > delta[i]){
+					second = first;
+					first = i;
+				}
+				else if (delta[second] > delta[i])
+					second = i;
+			}
+		}
+	}
+	results[0] = first;
+	results[1] = second;
+}
+
 
 static tw_lpid plan_dest(Job* job)
 {

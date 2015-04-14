@@ -19,7 +19,7 @@
 #define MAX_NUM_TASKS 30
 
 #define TIMER_CHECKOUT_INTERVAL 100
-#define MAX_PRIORITY 10
+#define MAX_NUM 9999999999999999
 #define PREDEADLINE 3
 
 //extern  GHashTable *work_map;
@@ -48,7 +48,7 @@ struct datsim_msg {
     tw_lpid src;          /* source of this request or ack */
     tw_lpid next_hop;          /* for fwd msg, next hop to forward */
     tw_lpid last_hop;          /* for fwd msg, last hop before forward */
-    char object_id[MAX_LENGTH_ID]; 
+    char object_id[MAX_LENGTH_ID];
     uint64_t size;  /*data size*/
     int incremented_flag; /* helper for reverse computation */
 };
@@ -71,7 +71,7 @@ struct Job {
     char dest_host[MAX_NAME_LENGTH_WKLD];
     uint64_t inputsize;
     uint64_t bandwidth;
-    int batched;
+    double t_dead;
     double deadline;
     double priority;
     int num_tasks;
@@ -92,6 +92,7 @@ typedef struct Task Task;
 struct Task{
     char job_id[MAX_LENGTH_ID];
     char task_id[MAX_LENGTH_ID];
+    char dest_host[MAX_NAME_LENGTH_WKLD];
     uint64_t tasksize;
     int taskNum;
     int state;
