@@ -148,7 +148,10 @@ Job* parse_job_by_trace(gchar* line) {
     parse_dest_bandwidth(jb, "bw-3sites.conf");
     strcpy(jb->state, "raw");
     double ideal = (double) jb->inputsize / (jb->bandwidth/MAX_CONN) + 0.01;
-    jb->t_dead = 10 * ideal;
+    if (jb->inputsize <= 1073741824)
+    	jb->t_dead = 20 * ideal;
+    else
+    	jb->t_dead = 40 * ideal;
     if (jb->t_dead < 300)
     	jb->t_dead = 300;
     //print_job(jb);

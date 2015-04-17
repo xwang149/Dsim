@@ -47,7 +47,10 @@ def parse_event_log(filename):
             job_stats[jobid]["t_dead"] = float(vals["t_dead"])
             job_stats[jobid]["wait"] = job_stats[jobid]["start"] - job_stats[jobid]["submit"]
             job_stats[jobid]["resp"] = job_stats[jobid]["end"] - job_stats[jobid]["submit"]
-            job_stats[jobid]["idealtime"] =  max(job_stats[jobid]["t_dead"]/10, 30)
+            if (job_stats[jobid]["inputsize"] <= 1073741824):
+                job_stats[jobid]["idealtime"] =  max(job_stats[jobid]["t_dead"]/20, 300/20)
+            else:
+                job_stats[jobid]["idealtime"] =  max(job_stats[jobid]["t_dead"]/40, 300/40)
             job_stats[jobid]["slowdown"] = (job_stats[jobid]["end"] - job_stats[jobid]["start"]) / job_stats[jobid]["idealtime"]
             job_stats[jobid]["resp_slow"] = job_stats[jobid]["resp"] / job_stats[jobid]["idealtime"]
             event_type=parts[3]
@@ -65,7 +68,7 @@ def parse_event_log(filename):
 def calc_utility(job_stats):
     for jobid in job_stats.keys():
         # if job_stats[jobid]["deadline"] == 0:
-            if (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]/10):
+            if (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]/20):
                 y1 = 100
             elif (job_stats[jobid]["resp"] < job_stats[jobid]["t_dead"]/2):
                 y1 = 80 + (10*job_stats[jobid]["t_dead"] - 20*job_stats[jobid]["resp"])/(0.4*job_stats[jobid]["t_dead"])

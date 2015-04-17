@@ -332,7 +332,7 @@ static void handle_schedule_req_event(
 		}
 		if (sched_policy == 1 ){
 			//utility based handling
-			handle_priority_queue(lp, job_queue);
+//			handle_priority_queue(lp, job_queue);
 			if (!g_queue_is_empty(job_queue)){
 		    	char job_id[MAX_LENGTH_ID];
 		    	strcpy(job_id, g_queue_peek_head(job_queue));
@@ -631,7 +631,7 @@ static double calc_job_utility(double deadtime, double resp){
 //    	return (double) 100*(deadtime - resp)/deadtime;
 //    else
 //    	return 0;
-    if (resp <= deadtime / 10.0)
+    if (resp <= deadtime / 20.0)
     	return 100;
     else if (resp <= deadtime / 2.0)
     	return (double) 80 + (10*deadtime - 20*resp) / (0.4*deadtime);
