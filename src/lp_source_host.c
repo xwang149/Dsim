@@ -372,12 +372,13 @@ void handle_job_ready_event(
         char* job_id = m->object_id;
         Job* job = g_hash_table_lookup(job_map, job_id);
         assert(job);
+        job->num_tasks = 1;
         fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, m->object_id);
 
         printf("[%lf][source_host][%lu][StartSending]dest_host=%s;jobid=%s;filesize=%lu;queuelength=%d\n",
         		now_sec(lp), lp->gid, job->dest_host, job->id, job->inputsize,g_queue_get_length(map_to_queue(job,-1)));
-        fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;connection=%d;priority=%f\n",
-        		now_sec(lp), lp->gid, m->object_id, job->dest_host, job->num_tasks, job->priority);
+        fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;connection=%d;concurrency=%d\n",
+        		now_sec(lp), lp->gid, m->object_id, job->dest_host, job->num_tasks, ns->concur_jobs);
     	//send a job
 	    datsim_msg m_remote;
 	    tw_lpid dest_id = get_source_router_lp_id();
@@ -387,7 +388,6 @@ void handle_job_ready_event(
         strcpy(m_remote.object_id, job->id);
         m_remote.size = job->inputsize;
         job->stats.start = now_sec(lp);
-        job->num_tasks = 1;
     	model_net_event(net_id, "download", dest_id, job->inputsize, 0.0, sizeof(datsim_msg), (const void*)&m_remote, 0, NULL, lp);
     }
     //transfer tasks in the task queue
@@ -399,9 +399,13 @@ void handle_job_ready_event(
 		    Task* task = g_hash_table_lookup(task_map, task_id);
 		    assert(task);
 		    if (task->taskNum == 0) {
+			    ns->concur_jobs += 1;
 		    	fprintf(event_log, "%lf;source_host;%lu;JR;jobid=%s\n", now_sec(lp), lp->gid, task->job_id);
 		    	printf("[%lf][source_host][%lu][StartSending]dest_host=%s;taskid=%s;filesize=%lu\n",
 		    	        		now_sec(lp), lp->gid, task->dest_host, task->job_id, task->tasksize);
+		        fprintf(event_log, "%lf;source_host;%lu;TS;jobid=%s;dest=%s;connection=%d;concurrency=%d\n",
+		        		now_sec(lp), lp->gid, m->object_id, task->dest_host, task->num_tasks, ns->concur_jobs);
+
 		    }
 		    //prepare to send the task to destination
 		    Trans_Limit *tl = g_hash_table_lookup(limit_map, task->dest_host);
@@ -450,8 +454,8 @@ void handle_job_done_event(source_host_state * ns,
     assert(tl);
     tl->concur_jobs -= job->num_tasks;
 //    printf("dest=%s;concur=%d\n",job->dest_host,tl->concur_jobs);
-    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;connection=%d\n",
-    		now_sec(lp), lp->gid, job_id,tl->host_id, job->num_tasks);
+    fprintf(event_log, "%lf;source_host;%lu;JD;jobid=%s;dest=%s;connection=%d;concurrency=%d\n",
+    		now_sec(lp), lp->gid, job_id,tl->host_id, job->num_tasks, ns->concur_jobs);
     //request the next job
     tw_event *e;
     datsim_msg *msg;
@@ -589,6 +593,7 @@ static void handle_task_queue(GQueue* job_queue, int conn[])
 				Task *task = NULL;
 				task = malloc(sizeof(Task));
 				memset(task, 0, sizeof(Task));
+				task->num_tasks = connNum;
 				task->tasksize = size - (connNum-j-1)*chunk;
 				size = size - task->tasksize;
 				strcpy(task->job_id, job->id);

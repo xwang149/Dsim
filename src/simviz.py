@@ -52,17 +52,17 @@ def parse_event_log(filename):
             else:
                 job_stats[jobid]["idealtime"] =  max(job_stats[jobid]["t_dead"]/40, 300/40)
             job_stats[jobid]["slowdown"] = (job_stats[jobid]["end"] - job_stats[jobid]["start"]) / job_stats[jobid]["idealtime"]
-            job_stats[jobid]["resp_slow"] = job_stats[jobid]["resp"] / job_stats[jobid]["idealtime"]
-            event_type=parts[3]
-            if event_type in ["TS", "JD"]:
-                t = float(parts[0])
-                p = parts[6].split("=")
-                d = parts[5].split("=")
-                concur = int(p[1])
-                dest_id = d[1]
-                if not trans_stats.has_key(dest_id):
-                    trans_stats[dest_id] = []
-                trans_stats[dest_id].append([t, concur])
+            job_stats[jobid]["resp_slow"] = job_stats[jobid]["resp"] / (job_stats[jobid]["end"]-job_stats[jobid]["start"])
+        event_type=parts[3]
+        if event_type in ["TS", "JD"]:
+            t = float(parts[0])
+            p = parts[7].split("=")
+            d = parts[5].split("=")
+            concur = int(p[1])
+            dest_id = d[1]
+            if not trans_stats.has_key(dest_id):
+                trans_stats[dest_id] = []
+            trans_stats[dest_id].append([t, concur])
     return trans_stats, job_stats
 
 def calc_utility(job_stats):
@@ -216,16 +216,17 @@ def generate_csv(job_stats, table_name):
 
 
 
-def plot_concurrency(trans_stats, filename, fig_num):
-    plt.figure(fig_num)
+def plot_concurrency(trans_stats, filename):
     sorted_keys = trans_stats.keys()
     sorted_keys.sort()
+    # outfilename = filename[0:filename.rfind(".")]+'_concur.csv'
+    # outfile = open(outfilename, "w")
     for key in sorted_keys:
-        max_time = int(math.ceil(max(trans_stats[key])[0]))
+        max_time = 65000
         trans_stats[key].sort()
         step = []
         concur = []
-        for i in xrange(0, max_time+1):
+        for i in xrange(0, 65000, 10):
             step.append(i)
             pos = 0
             c = 0
@@ -235,7 +236,10 @@ def plot_concurrency(trans_stats, filename, fig_num):
                 c = trans_stats[key][pos][1]
                 pos += 1
             concur.append(c)
-        plt.step(step, concur, label='dest_'+key)
+            # line = ("%d,%d") % (i,c)
+            # outfile.write(line)
+        plt.step(step, concur)
+        label='dest_'+key
         # plt.xlim(0, max_time)
         # plt.ylim(0, max_conr+1)
     plt.legend()
@@ -344,14 +348,14 @@ if __name__ == "__main__":
     job_stats = calc_utility(job_stats)
 
     job_metrics = calc_job_stats(job_stats)
-    show_job_metrics(job_metrics, "../results/results_source.csv")
+    # show_job_metrics(job_metrics, "../results/results_source.csv")
 
-    generate_csv(job_stats, outfile+"_jobstats.csv")
+    # generate_csv(job_stats, outfile+"_jobstats.csv")
 
     dest_metrics  = calc_dest_metrics(job_stats)
-    show_dest_metrics(dest_metrics, "../results/results_dest.csv")
+    # show_dest_metrics(dest_metrics, "../results/results_dest.csv")
 
-    # plot_concurrency(trans_stats, opts.eventlog, 1)
+    plot_concurrency(trans_stats, opts.eventlog)
     # plot_job_load(job_stats, "../results/job_load.png", 2)
 
     # resp_time, run_time, utility = prepare_bins(dest_metrics)

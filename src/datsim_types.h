@@ -95,6 +95,7 @@ struct Task{
     char dest_host[MAX_NAME_LENGTH_WKLD];
     uint64_t tasksize;
     int taskNum;
+    int num_tasks;
     int state;
     TaskStat stats;
 };
